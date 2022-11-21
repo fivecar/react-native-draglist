@@ -1,0 +1,34 @@
+{
+  "name": "react-native-draglist",
+  "version": "1.0.0",
+  "description": "FlatList that allows items to be reordered by dragging them",
+  "main": "index.tsx",
+  "scripts": {
+    "test": "echo \"YOLO! What could possibly go wrong?\" && exit 1"
+  },
+  "keywords": [
+    "react",
+    "native",
+    "react",
+    "flatlist",
+    "drag",
+    "draggable",
+    "reorder"
+  ],
+  "author": "Philip Su",
+  "license": "MIT",
+  "dependencies": {
+    "react": "^18.1.0",
+    "react-native": "^0.70.6"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fivecar/react-native-draglist.git"
+  },
+  "devDependencies": {
+    "@tsconfig/react-native": "^2.0.2",
+    "@types/react": "^18.0.25",
+    "@types/react-native": "^0.70.6",
+    "typescript": "^4.9.3"
+  }
+}

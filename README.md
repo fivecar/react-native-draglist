@@ -52,7 +52,7 @@ That's basically it.
 
 ## Show Me The Code
 
-```
+```TSX
 import React, {useState} from "react";
 import {TouchableOpacity} from "react-native";
 import DragList, { DragListRenderItemInfo } from "react-native-draglist";

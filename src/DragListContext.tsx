@@ -26,7 +26,7 @@ const DragListContext = React.createContext<
   DragListContextValue<any> | undefined
 >(undefined);
 
-export function DraggableFlatListProvider<T>({
+export function DragListProvider<T>({
   activeKey,
   activeIndex,
   keyExtractor,

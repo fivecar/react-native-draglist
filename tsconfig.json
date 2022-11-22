@@ -1,3 +1,13 @@
 {
   "extends": "@tsconfig/react-native/tsconfig.json",     /* Recommended React Native TSConfig base */
+  "compilerOptions": {
+    "outDir": "./lib",
+    "strict": true,
+    "noEmit": false,
+    "jsx": "react",
+    "skipLibCheck": true,
+    "types": []
+  },
+  "include": ["src/**/*"],
+  "exclude": ["**/__tests__/*"]
 }

@@ -17,7 +17,7 @@ import {
   ViewStyle,
 } from "react-native";
 import {
-  DraggableFlatListProvider,
+  DragListProvider,
   LayoutCache,
   useDragListContext,
 } from "./DragListContext";
@@ -217,7 +217,7 @@ export default function DragList<T>(props: Props<T>) {
   }
 
   return (
-    <DraggableFlatListProvider
+    <DragListProvider
       activeKey={activeKey.current}
       activeIndex={activeIndex.current}
       keyExtractor={keyExtractor}
@@ -244,7 +244,7 @@ export default function DragList<T>(props: Props<T>) {
           {...rest}
         />
       </View>
-    </DraggableFlatListProvider>
+    </DragListProvider>
   );
 }
 

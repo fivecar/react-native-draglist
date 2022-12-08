@@ -1,8 +1,9 @@
 {
   "extends": "@tsconfig/react-native/tsconfig.json",     /* Recommended React Native TSConfig base */
   "compilerOptions": {
-    "outDir": "./lib",
+    "outDir": "./dist",
     "strict": true,
+    "module": "ES2015",
     "noEmit": false,
     "jsx": "react",
     "skipLibCheck": true,

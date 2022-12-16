@@ -81,13 +81,11 @@ function DraggableLyrics() {
   }
 
   async function onReordered(fromIndex: number, toIndex: number) {
-    // Since we remove the element first, account for its index shift
-    const finalIndex = fromIndex < toIndex ? toIndex - 1 : toIndex;
     const copy = [...data];		// Don't modify react data in-place
     const removed = copy.splice(fromIndex, 1);
 
-    copy.splice(finalIndex, 0, removed[0]);	// Now insert at the new pos
-	setData(copy);
+    copy.splice(toIndex, 0, removed[0]);	// Now insert at the new pos
+	  setData(copy);
   }
 
   return (

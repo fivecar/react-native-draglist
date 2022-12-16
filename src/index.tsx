@@ -44,10 +44,10 @@ interface ExtraData {
 }
 
 interface Props<T> extends Omit<FlatListProps<T>, "renderItem"> {
-  containerStyle: StyleProp<ViewStyle>;
   data: T[];
   keyExtractor: (item: T) => string;
   renderItem: (info: DragListRenderItemInfo<T>) => React.ReactElement | null;
+  containerStyle?: StyleProp<ViewStyle>;
   onDragBegin?: () => void;
   onDragEnd?: () => void;
   onReordered?: (fromIndex: number, toIndex: number) => Promise<void>;

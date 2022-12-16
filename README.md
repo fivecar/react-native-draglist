@@ -53,51 +53,66 @@ That's basically it.
 ## Show Me The Code
 
 ```TSX
-import React, {useState} from "react";
-import {TouchableOpacity} from "react-native";
-import DragList, { DragListRenderItemInfo } from "react-native-draglist";
+import React, {useState} from 'react';
+import {StyleSheet, Text, TouchableOpacity, View} from 'react-native';
+import DragList, {DragListRenderItemInfo} from 'react-native-draglist';
 
-const SOUND_OF_SILENCE = ["hello","darkness","my","old","friend"];
+const SOUND_OF_SILENCE = ['hello', 'darkness', 'my', 'old', 'friend'];
 
-function DraggableLyrics() {
+export default function DraggableLyrics() {
   const [data, setData] = useState(SOUND_OF_SILENCE);
 
   function keyExtractor(str: string) {
     return str;
   }
 
-  function renderItem(info: DragListRenderItemInfo) {
+  function renderItem(info: DragListRenderItemInfo<string>) {
     const {item, onStartDrag, isActive} = info;
 
     return (
       <TouchableOpacity
         key={item}
-        style={{backgroundColor: isActive ? "blue" : "black"}}
-        onPress={onStartDrag}
-      >
+        onPressIn={onStartDrag}>
         <Text>{item}</Text>
       </TouchableOpacity>
     );
   }
 
   async function onReordered(fromIndex: number, toIndex: number) {
-    const copy = [...data];		// Don't modify react data in-place
+    const copy = [...data]; // Don't modify react data in-place
     const removed = copy.splice(fromIndex, 1);
 
-    copy.splice(toIndex, 0, removed[0]);	// Now insert at the new pos
-	  setData(copy);
+    copy.splice(toIndex, 0, removed[0]); // Now insert at the new pos
+    setData(copy);
   }
 
   return (
-    <DragList
-      data={data}
-      keyExtractor={keyExtractor}
-      onReordered={onReordered}
-      renderItem={renderItem}
-    />
+    <View>
+      <DragList
+        data={data}
+        keyExtractor={keyExtractor}
+        onReordered={onReordered}
+        renderItem={renderItem}
+      />
+    </View>
   );
 }
 ```
+
+## Example Included
+To play with the list, you can run the example within `example/` in order to test the list yourself by first installing all necessary packages:
+
+```console
+npm install
+cd example
+npm install
+cd ios
+pod install
+cd ..
+npm start
+```
+
+Next, build the project in Xcode by opening `example/ios/example.xcworkspace`. You should then see the above sample code running.
 
 # Caveats
 This package is implemented with probably 1/10th the files, and 1/20th the advanced concepts, as `react-native-draggable-flatlist`. The latter even directly modifies unpublished internal data structures of `react-native-reanimated`, so it's all sorts of advanced in ways that this package will never be. You should prefer, and default to, using `react-native-draggable-flatlist` unless its random hangs and crashes bother you.

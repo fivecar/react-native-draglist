@@ -62,7 +62,6 @@ export default function DragList<T>(props: Props<T>) {
     keyExtractor,
     onDragBegin,
     onDragEnd,
-    onReordered,
     onScroll,
     onLayout,
     renderItem,
@@ -79,6 +78,7 @@ export default function DragList<T>(props: Props<T>) {
   });
   const layouts = useRef<LayoutCache>({}).current;
   const dataRef = useRef(data);
+  const reorderRef = useRef(props.onReordered);
   const flatRef = useRef<FlatList<T>>(null);
   const flatWrapRef = useRef<View>(null);
   const flatWrapLayout = useRef<LayoutRectangle>({
@@ -137,7 +137,7 @@ export default function DragList<T>(props: Props<T>) {
           while (
             curIndex < dataRef.current.length &&
             layouts.hasOwnProperty(
-              (key = keyExtractor(dataRef.current[curIndex])),
+              (key = keyExtractor(dataRef.current[curIndex]))
             ) &&
             layouts[key].y + layouts[key].height < clientY
           ) {
@@ -148,7 +148,7 @@ export default function DragList<T>(props: Props<T>) {
           // vertical center. We could potentially be more awesome by asking
           // onStartDrag to pass us the relative y position of the drag handle.
           pan.setValue(
-            clientY - (layouts[activeKey.current].y + dragItemHeight / 2),
+            clientY - (layouts[activeKey.current].y + dragItemHeight / 2)
           );
           panIndex.current = curIndex;
 
@@ -166,7 +166,7 @@ export default function DragList<T>(props: Props<T>) {
             panIndex.current > activeIndex.current
           )
         ) {
-          await onReordered?.(activeIndex.current, panIndex.current);
+          await reorderRef.current?.(activeIndex.current, panIndex.current);
         }
         activeIndex.current = -1;
         activeKey.current = null;
@@ -174,12 +174,16 @@ export default function DragList<T>(props: Props<T>) {
         setExtra({ activeKey: null, panIndex: -1 });
         pan.setValue(0);
       },
-    }),
+    })
   ).current;
 
   useEffect(() => {
     dataRef.current = data;
   }, [data]);
+
+  useEffect(() => {
+    reorderRef.current = props.onReordered;
+  }, [props.onReordered]);
 
   function renderDragItem(info: ListRenderItemInfo<T>) {
     const key = keyExtractor(info.item);

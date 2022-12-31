@@ -294,6 +294,9 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
         return;
       }
     }
+    if (!activeKey) {
+      anim.setValue(0);
+    }
     setIsOffset(false);
   }, [activeKey, index, panIndex, key, activeIndex]);
 

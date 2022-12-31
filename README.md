@@ -37,7 +37,7 @@ All `FlatList` properties are supported, with the following extensions/modificat
 
 |Field|Type|Note|
 |--|--|--|
-|`onStartDrag`|`() => void`  |Your item should call this function when you detect a drag starting (i.e. when the user wants to begin reordering the list). A common implementation is to have a drag handle on your item whose `onPress` calls `onStartDrag`. Alternatively, you could have an `onLongPress` call this, or use any other mechanism that makes most sense for your UI. *DragList* will not start rendering items as being dragged until you call this.
+|`onStartDrag`|`() => void`  |Your item should call this function when you detect a drag starting (i.e. when the user wants to begin reordering the list). A common implementation is to have a drag handle on your item whose `onPressIn` calls `onStartDrag`. Alternatively, you could have an `onLongPress` call this, or use any other mechanism that makes most sense for your UI. *DragList* will not start rendering items as being dragged until you call this.
 |`isActive`|`boolean`|This is `true` iff the current item is actively being dragged by the user. This can be used to render the item differently while it's being dragged (e.g. less opacity, different background color, borders, etc).
 
 - `async onReordered(fromIndex: number, toIndex: number)` is called once the user drops a dragged item in its new position. This is *not called* if the user drops the item back in the spot it started. `DragList` will await this function, and not reset its UI until it completes, so that you can make modifications to the underlying data before the list resets its state.

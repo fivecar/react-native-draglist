@@ -106,13 +106,8 @@ To play with the list, you can run the example within `example/` in order to tes
 npm install
 cd example
 npm install
-cd ios
-pod install
-cd ..
-npm start
+npm run android   # or `npm run ios`, which takes longer to build
 ```
-
-Next, build the project in Xcode by opening `example/ios/example.xcworkspace`. You should then see the above sample code running.
 
 # Caveats
 This package is implemented with probably 1/10th the files, and 1/20th the advanced concepts, as `react-native-draggable-flatlist`. The latter even directly modifies unpublished internal data structures of `react-native-reanimated`, so it's all sorts of advanced in ways that this package will never be. You should prefer, and default to, using `react-native-draggable-flatlist` unless its random hangs and crashes bother you.

@@ -1,13 +1,13 @@
 {
   "name": "react-native-draglist",
-  "version": "2.1.0",
+  "version": "3.0.0",
   "description": "FlatList that reorders items by dragging",
   "main": "dist/index.js",
   "module": "dist/index.modern.js",
   "source": "src/index.tsx",
   "types": "dist/index.d.ts",
   "scripts": {
-    "test": "echo \"YOLO! What could possibly go wrong?\" && exit 1",
+    "test": "echo \"YOLO! What could possibly go wrong? (On a serious note, please run both iOS and Android examples and drag things around).\" && exit 1",
     "build": "microbundle-crl --no-compress --format modern,cjs",
     "prepare": "npm run build",
     "release": "release-it"

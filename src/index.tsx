@@ -316,9 +316,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
       onLayout(evt);
     }
 
-    ref.current?.measure((x, y, width, height) => {
-      layouts[key] = { x, y, width, height };
-    });
+    layouts[key] = { ...evt.nativeEvent.layout };
   }
 
   return (

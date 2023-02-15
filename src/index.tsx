@@ -242,6 +242,7 @@ export default function DragList<T>(props: Props<T>) {
           renderItem={renderDragItem}
           CellRendererComponent={CellRendererComponent}
           extraData={extra}
+          scrollEnabled={!activeKey.current}
           onScroll={onDragScroll}
           scrollEventThrottle={16} // From react-native-draggable-flatlist; no idea why.
           removeClippedSubviews={false} // https://github.com/facebook/react-native/issues/18616

@@ -1,6 +1,10 @@
 
 # react-native-draglist
 
+[![npm package][npm-img]][npm-url]
+[![Downloads][downloads-img]][downloads-url]
+[![Issues][issues-img]][issues-url]
+
 FlatList that can be reordered by dragging its items
 
 ![show_me_reordering](https://user-images.githubusercontent.com/39933441/203197020-eb409b97-e108-4d9b-8ee4-684ae238b65b.gif)
@@ -113,3 +117,10 @@ npm run android   # or `npm run ios`, which takes longer to build
 This package is implemented with probably 1/10th the files, and 1/20th the advanced concepts, as `react-native-draggable-flatlist`. The latter even directly modifies unpublished internal data structures of `react-native-reanimated`, so it's all sorts of advanced in ways that this package will never be. You should prefer, and default to, using `react-native-draggable-flatlist` unless its random hangs and crashes bother you.
 
 If you have suggestions, or better yet, PRs for how this package can be improved, [please connect via GitHub](https://github.com/fivecar/react-native-draglist/)!
+
+[downloads-img]:https://img.shields.io/npm/dt/react-native-draglist
+[downloads-url]:https://www.npmtrends.com/react-native-draglist
+[npm-img]:https://img.shields.io/npm/v/react-native-draglist
+[npm-url]:https://www.npmjs.com/package/react-native-draglist
+[issues-img]:https://img.shields.io/github/issues/fivecar/react-native-draglist
+[issues-url]:https://github.com/fivecar/

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Animated,
   Easing,
@@ -185,40 +185,49 @@ export default function DragList<T>(props: Props<T>) {
     reorderRef.current = props.onReordered;
   }, [props.onReordered]);
 
-  function renderDragItem(info: ListRenderItemInfo<T>) {
-    const key = keyExtractor(info.item);
-    const isActive = key === activeKey.current;
+  const renderDragItem = useCallback(
+    (info: ListRenderItemInfo<T>) => {
+      const key = keyExtractor(info.item);
+      const isActive = key === activeKey.current;
 
-    return props.renderItem({
-      ...info,
-      onStartDrag: () => {
-        // We don't allow dragging for lists less than 2 elements
-        if (data.length > 1) {
-          activeIndex.current = info.index;
-          activeKey.current = key;
-          panIndex.current = activeIndex.current;
-          setExtra({ activeKey: key, panIndex: info.index });
-        }
-      },
-      isActive,
-    });
-  }
+      return props.renderItem({
+        ...info,
+        onStartDrag: () => {
+          // We don't allow dragging for lists less than 2 elements
+          if (data.length > 1) {
+            activeIndex.current = info.index;
+            activeKey.current = key;
+            panIndex.current = activeIndex.current;
+            setExtra({ activeKey: key, panIndex: info.index });
+          }
+        },
+        isActive,
+      });
+    },
+    [props.renderItem, data.length]
+  );
 
-  function onDragScroll(event: NativeSyntheticEvent<NativeScrollEvent>) {
-    scrollPos.current = event.nativeEvent.contentOffset.y;
-    if (onScroll) {
-      onScroll(event);
-    }
-  }
+  const onDragScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      scrollPos.current = event.nativeEvent.contentOffset.y;
+      if (onScroll) {
+        onScroll(event);
+      }
+    },
+    [onScroll]
+  );
 
-  function onDragLayout(evt: LayoutChangeEvent) {
-    flatWrapRef.current?.measure((_x, _y, width, height, pageX, pageY) => {
-      flatWrapLayout.current = { x: pageX, y: pageY, width, height };
-    });
-    if (onLayout) {
-      onLayout(evt);
-    }
-  }
+  const onDragLayout = useCallback(
+    (evt: LayoutChangeEvent) => {
+      flatWrapRef.current?.measure((_x, _y, width, height, pageX, pageY) => {
+        flatWrapLayout.current = { x: pageX, y: pageY, width, height };
+      });
+      if (onLayout) {
+        onLayout(evt);
+      }
+    },
+    [onLayout]
+  );
 
   return (
     <DragListProvider

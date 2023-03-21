@@ -150,10 +150,12 @@ export default function DragList<T>(props: Props<T>) {
           pan.setValue(
             clientY - (layouts[activeKey.current].y + dragItemHeight / 2)
           );
-          panIndex.current = curIndex;
 
           // This simply exists to trigger a re-render.
-          setExtra({ ...extra, panIndex: panIndex.current });
+          if (panIndex.current != curIndex) {
+            setExtra({ ...extra, panIndex: curIndex });
+          }
+          panIndex.current = curIndex;
         }
       },
       onPanResponderRelease: async (_, _gestate) => {

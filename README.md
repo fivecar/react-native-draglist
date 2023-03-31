@@ -50,7 +50,7 @@ All `FlatList` properties are supported, with the following extensions/modificat
   - `toIndex` reflects the position to which the item should be moved in the pre-modified `data`. It will never equal `fromIndex`. So, for instance, if `toIndex` is `0`, you should make `data[fromIndex]` the first element of `data`. **Note**: if the user drags the item to the very end of the list, `toIndex` will equal `data.length` (i.e. it will reference an index that is one beyond the end of the list).
 
 ## Typical Flow
-1. Set up `DragList` much like you do any `FlatList`, except with a `renderItem` that calls `onStartDrag` at the appropriate time.
+1. Set up `DragList` much like you do any `FlatList`, except with a `renderItem` that calls `onStartDrag` at the appropriate time and `onEndDrag` in `onPressOut`.
 2. When `onReordered` gets called, update the ordering of `data`.
 
 That's basically it.

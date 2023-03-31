@@ -45,10 +45,12 @@
     "react-native": "^0.70.6",
     "release-it": "^15.5.1"
   },
-  "plugins": {
-    "@release-it/conventional-changelog": {
-      "preset": "angular",
-      "infile": "CHANGELOG.md"
+  "release-it": {
+    "plugins": {
+      "@release-it/conventional-changelog": {
+        "preset": "angular",
+        "infile": "CHANGELOG.md"
+      }
     }
   }
 }

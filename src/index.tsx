@@ -32,6 +32,8 @@ if (Platform.OS === "android") {
 export interface DragListRenderItemInfo<T> extends ListRenderItemInfo<T> {
   // Call this function whenever you detect a drag motion starting.
   onStartDrag: () => void;
+  // Call this function whenever drags end (e.g. onPressOut)
+  onEndDrag: () => void;
   // Whether the item is being dragged at the moment.
   isActive: boolean;
 }
@@ -78,6 +80,7 @@ export default function DragList<T>(props: Props<T>) {
   });
   const layouts = useRef<LayoutCache>({}).current;
   const dataRef = useRef(data);
+  const panGrantedRef = useRef(false);
   const reorderRef = useRef(props.onReordered);
   const flatRef = useRef<FlatList<T>>(null);
   const flatWrapRef = useRef<View>(null);
@@ -98,6 +101,7 @@ export default function DragList<T>(props: Props<T>) {
       onMoveShouldSetPanResponderCapture: () => !!activeKey.current,
       onPanResponderGrant: (_, gestate) => {
         pan.setValue(gestate.dy);
+        panGrantedRef.current = true;
         onDragBegin?.();
       },
       onPanResponderMove: (_, gestate) => {
@@ -170,14 +174,19 @@ export default function DragList<T>(props: Props<T>) {
         ) {
           await reorderRef.current?.(activeIndex.current, panIndex.current);
         }
-        activeIndex.current = -1;
-        activeKey.current = null;
-        panIndex.current = -1;
-        setExtra({ activeKey: null, panIndex: -1 });
-        pan.setValue(0);
+        reset();
       },
     })
   ).current;
+
+  const reset = useCallback(() => {
+    activeIndex.current = -1;
+    activeKey.current = null;
+    panIndex.current = -1;
+    setExtra({ activeKey: null, panIndex: -1 });
+    pan.setValue(0);
+    panGrantedRef.current = false;
+  }, []);
 
   useEffect(() => {
     dataRef.current = data;
@@ -201,6 +210,21 @@ export default function DragList<T>(props: Props<T>) {
             activeKey.current = key;
             panIndex.current = activeIndex.current;
             setExtra({ activeKey: key, panIndex: info.index });
+          }
+        },
+        onEndDrag: () => {
+          // You can sometimes have started a drag and yet not captured the
+          // pan (because you don't capture the responder during onStart but
+          // do during onMove, and yet the user hasn't moved). In those cases,
+          // you need to reset everything so that items become !isActive.
+          // In cases where you DID capture the pan, this function is a no-op
+          // because we'll end the drag when it really ends (since we've
+          // captured it). This all is necessary because the way the user
+          // decided to call onStartDrag is likely in response to an onPressIn,
+          // which then triggers on onPressOut the moment we capture (thus
+          // leading to a premature call to onEndDrag here).
+          if (activeKey.current !== null && !panGrantedRef.current) {
+            reset();
           }
         },
         isActive,

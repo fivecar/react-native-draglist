@@ -12,13 +12,14 @@ export default function DraggableLyrics() {
   }
 
   function renderItem(info: DragListRenderItemInfo<string>) {
-    const {item, onStartDrag, isActive} = info;
+    const {item, onStartDrag, onEndDrag, isActive} = info;
 
     return (
       <TouchableOpacity
         key={item}
         style={[styles.item, isActive && {backgroundColor: 'yellow'}]}
-        onPressIn={onStartDrag}>
+        onPressIn={onStartDrag}
+        onPressOut={onEndDrag}>
         <Text style={styles.text}>{item}</Text>
       </TouchableOpacity>
     );

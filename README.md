@@ -26,7 +26,7 @@ It is limited in the following ways:
 - It only handles vertical lists (though adding horizontal in a PR won't be hard)
 
 # Installation
-With no dependencies outside of `react-native` and `react`, this package installs super easily:
+With no dependencies outside of `react-native` and `react`, this package installs easily:
 ```
 npm install react-native-draglist
 ```

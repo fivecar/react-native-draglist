@@ -48,6 +48,7 @@ All `FlatList` properties are supported, with the following extensions/modificat
 - `async onReordered(fromIndex: number, toIndex: number)` is called once the user drops a dragged item in its new position. This is *not called* if the user drops the item back in the spot it started. `DragList` will await this function, and not reset its UI until it completes, so that you can make modifications to the underlying data before the list resets its state.
   - `fromIndex` will be between `0` and `data.length` (the total number of items you gave `DragList` to render).
   - `toIndex` reflects the position to which the item should be moved in the pre-modified `data`. It will never equal `fromIndex`. So, for instance, if `toIndex` is `0`, you should make `data[fromIndex]` the first element of `data`. **Note**: if the user drags the item to the very end of the list, `toIndex` will equal `data.length` (i.e. it will reference an index that is one beyond the end of the list).
+- `onHoverChanged(index: number)` (optional): called whenever an item being dragged changes its index in the list. Note this is only called when the item hasn't been dropped into its final (potentially new) index yet — it's only called as the item hovers around various indicies that it could be dropped at.
 
 ## Typical Flow
 1. Set up `DragList` much like you do any `FlatList`, except with a `renderItem` that calls `onStartDrag` at the appropriate time and `onEndDrag` in `onPressOut`.

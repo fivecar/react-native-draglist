@@ -52,6 +52,7 @@ interface Props<T> extends Omit<FlatListProps<T>, "renderItem"> {
   containerStyle?: StyleProp<ViewStyle>;
   onDragBegin?: () => void;
   onDragEnd?: () => void;
+  onHoverChanged?: (hoverIndex: number) => Promise<void>;
   onReordered?: (fromIndex: number, toIndex: number) => Promise<void>;
   onScroll?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
   onLayout?: (e: LayoutChangeEvent) => void;
@@ -81,6 +82,7 @@ export default function DragList<T>(props: Props<T>) {
   const layouts = useRef<LayoutCache>({}).current;
   const dataRef = useRef(data);
   const panGrantedRef = useRef(false);
+  const hoverRef = useRef(props.onHoverChanged);
   const reorderRef = useRef(props.onReordered);
   const flatRef = useRef<FlatList<T>>(null);
   const flatWrapRef = useRef<View>(null);
@@ -158,6 +160,7 @@ export default function DragList<T>(props: Props<T>) {
           // This simply exists to trigger a re-render.
           if (panIndex.current != curIndex) {
             setExtra({ ...extra, panIndex: curIndex });
+            hoverRef.current?.(curIndex);
           }
           panIndex.current = curIndex;
         }

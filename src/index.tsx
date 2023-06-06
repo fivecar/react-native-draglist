@@ -58,7 +58,10 @@ interface Props<T> extends Omit<FlatListProps<T>, "renderItem"> {
   onLayout?: (e: LayoutChangeEvent) => void;
 }
 
-export default function DragList<T>(props: Props<T>) {
+function DragListImpl<T>(
+  props: Props<T>,
+  externalRef: React.ForwardedRef<FlatList<T>>
+) {
   const {
     containerStyle,
     data,
@@ -84,7 +87,7 @@ export default function DragList<T>(props: Props<T>) {
   const panGrantedRef = useRef(false);
   const hoverRef = useRef(props.onHoverChanged);
   const reorderRef = useRef(props.onReordered);
-  const flatRef = useRef<FlatList<T>>(null);
+  const flatRef = useRef<FlatList<T> | null>(null);
   const flatWrapRef = useRef<View>(null);
   const flatWrapLayout = useRef<LayoutRectangle>({
     x: 0,
@@ -274,7 +277,16 @@ export default function DragList<T>(props: Props<T>) {
         onLayout={onDragLayout}
       >
         <FlatList
-          ref={flatRef}
+          ref={r => {
+            flatRef.current = r;
+            if (!!externalRef) {
+              if (typeof externalRef === "function") {
+                externalRef(r);
+              } else {
+                externalRef.current = r;
+              }
+            }
+          }}
           keyExtractor={keyExtractor}
           data={data}
           renderItem={renderDragItem}
@@ -379,3 +391,10 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
     </Animated.View>
   );
 }
+
+// This preserves Typescript generic types through the export of forwardRef().
+type ForwardRefFn<R> = <P = {}>(
+  p: P & React.RefAttributes<R>
+) => React.ReactElement | null;
+
+export default React.forwardRef(DragListImpl) as ForwardRefFn<FlatList>;

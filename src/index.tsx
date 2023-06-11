@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import {
   Animated,
   Easing,
@@ -250,16 +250,21 @@ function DragListImpl<T>(
   );
 
   const onDragLayout = useCallback(
-    (evt: LayoutChangeEvent) => {
+    (evt: LayoutChangeEvent | null) => {
       flatWrapRef.current?.measure((_x, _y, width, height, pageX, pageY) => {
         flatWrapLayout.current = { x: pageX, y: pageY, width, height };
       });
-      if (onLayout) {
+      if (onLayout && evt) {
         onLayout(evt);
       }
     },
     [onLayout]
   );
+
+  useImperativeHandle(externalRef, () => ({
+    reMeasure: () => onDragLayout(null),
+  } as any));
+  
 
   return (
     <DragListProvider

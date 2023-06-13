@@ -18,7 +18,6 @@ export default function DraggableLyrics() {
       .map(num => SOUND_OF_SILENCE.map(word => `${word}${num}`))
       .flat(),
   );
-  const [scrollViewHeight, setScrollViewHeight] = useState(250);
   const listRef = React.useRef<FlatList<string>>(null);
 
   function keyExtractor(str: string) {
@@ -65,24 +64,17 @@ export default function DraggableLyrics() {
         renderItem={renderItem}
       />
       <Text style={styles.header}>Auto-Scrolling List</Text>
-      <View style={{height: scrollViewHeight}}>
-        <DragList
-          style={styles.scrolledList}
-          ref={listRef} // Verify that using the ref works
-          data={scrollData}
-          keyExtractor={keyExtractor}
-          onReordered={onScrollReordered}
-          renderItem={renderItem}
-          onLayout={() => console.log('View is laying out again!')}
-        />
-      </View>
+      <DragList
+        style={styles.scrolledList}
+        ref={listRef} // Verify that using the ref works
+        data={scrollData}
+        keyExtractor={keyExtractor}
+        onReordered={onScrollReordered}
+        renderItem={renderItem}
+      />
       <Button
         onPress={() => listRef.current?.scrollToIndex({index: 0})}
         title="Scroll to Top"
-      />
-      <Button
-        onPress={() => setScrollViewHeight(scrollViewHeight + 50)}
-        title="Add 50px to ScrollView Height"
       />
     </View>
   );
@@ -113,6 +105,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'yellow',
   },
   scrolledList: {
-    //    height: 300,
+    height: 300,
   },
 });

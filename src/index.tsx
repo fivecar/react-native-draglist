@@ -107,6 +107,17 @@ function DragListImpl<T>(
       onPanResponderGrant: (_, gestate) => {
         pan.setValue(gestate.dy);
         panGrantedRef.current = true;
+
+        flatWrapRef.current?.measureInWindow((x, y) => {
+          // Capture the latest y position upon starting a drag, because the
+          // window could have moved since we last measured. Remember that moves
+          // without resizes _don't_ generate onLayout, so we need to actively
+          // measure here. React doesn't give a way to subscribe to move events.
+          // We don't overwrite width/height from this measurement because
+          // height can come back 0.
+          flatWrapLayout.current = { ...flatWrapLayout.current, x, y };
+        });
+
         onDragBegin?.();
       },
       onPanResponderMove: (_, gestate) => {
@@ -251,7 +262,10 @@ function DragListImpl<T>(
 
   const onDragLayout = useCallback(
     (evt: LayoutChangeEvent) => {
+      console.log("onDragLayout");
       flatWrapRef.current?.measure((_x, _y, width, height, pageX, pageY) => {
+        // Even though we capture x/y during onPanResponderGrant, we still
+        // capture height here because measureInWindow can return 0 height.
         flatWrapLayout.current = { x: pageX, y: pageY, width, height };
       });
       if (onLayout) {
@@ -260,7 +274,6 @@ function DragListImpl<T>(
     },
     [onLayout]
   );
-
   return (
     <DragListProvider
       activeKey={activeKey.current}

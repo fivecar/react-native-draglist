@@ -262,7 +262,6 @@ function DragListImpl<T>(
 
   const onDragLayout = useCallback(
     (evt: LayoutChangeEvent) => {
-      console.log("onDragLayout");
       flatWrapRef.current?.measure((_x, _y, width, height, pageX, pageY) => {
         // Even though we capture x/y during onPanResponderGrant, we still
         // capture height here because measureInWindow can return 0 height.

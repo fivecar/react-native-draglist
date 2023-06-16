@@ -25,14 +25,14 @@ export default function DraggableLyrics() {
   }
 
   function renderItem(info: DragListRenderItemInfo<string>) {
-    const {item, onStartDrag, onEndDrag, isActive} = info;
+    const {item, onDragStart, onDragEnd, isActive} = info;
 
     return (
       <TouchableOpacity
         key={item}
         style={[styles.item, isActive && styles.active]}
-        onPressIn={onStartDrag}
-        onPressOut={onEndDrag}>
+        onPressIn={onDragStart}
+        onPressOut={onDragEnd}>
         <Text style={styles.text}>{item}</Text>
       </TouchableOpacity>
     );

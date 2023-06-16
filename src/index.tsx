@@ -30,11 +30,31 @@ if (Platform.OS === "android") {
 
 // Each renderItem call is given this when rendering a DragList
 export interface DragListRenderItemInfo<T> extends ListRenderItemInfo<T> {
-  // Call this function whenever you detect a drag motion starting.
+  /**
+   * Call this function whenever you detect a drag motion starting.
+   */
+  onDragStart: () => void;
+
+  /**
+   * Call this function whenever a drag motion ends (e.g. onPressOut)
+   */
+  onDragEnd: () => void;
+
+  /**
+   * @deprecated Use onDragStart instead
+   * @see onDragStart
+   */
   onStartDrag: () => void;
-  // Call this function whenever drags end (e.g. onPressOut)
+
+  /**
+   * @deprecated Use onDragEnd instead
+   * @see onDragEnd
+   */
   onEndDrag: () => void;
-  // Whether the item is being dragged at the moment.
+
+  /**
+   * Whether the item is being dragged at the moment.
+   */
   isActive: boolean;
 }
 
@@ -206,33 +226,37 @@ function DragListImpl<T>(
     (info: ListRenderItemInfo<T>) => {
       const key = keyExtractor(info.item);
       const isActive = key === activeKey.current;
+      const onDragStart = () => {
+        // We don't allow dragging for lists less than 2 elements
+        if (data.length > 1) {
+          activeIndex.current = info.index;
+          activeKey.current = key;
+          panIndex.current = activeIndex.current;
+          setExtra({ activeKey: key, panIndex: info.index });
+        }
+      };
+      const onDragEnd = () => {
+        // You can sometimes have started a drag and yet not captured the
+        // pan (because you don't capture the responder during onStart but
+        // do during onMove, and yet the user hasn't moved). In those cases,
+        // you need to reset everything so that items become !isActive.
+        // In cases where you DID capture the pan, this function is a no-op
+        // because we'll end the drag when it really ends (since we've
+        // captured it). This all is necessary because the way the user
+        // decided to call onStartDrag is likely in response to an onPressIn,
+        // which then triggers on onPressOut the moment we capture (thus
+        // leading to a premature call to onEndDrag here).
+        if (activeKey.current !== null && !panGrantedRef.current) {
+          reset();
+        }
+      };
 
       return props.renderItem({
         ...info,
-        onStartDrag: () => {
-          // We don't allow dragging for lists less than 2 elements
-          if (data.length > 1) {
-            activeIndex.current = info.index;
-            activeKey.current = key;
-            panIndex.current = activeIndex.current;
-            setExtra({ activeKey: key, panIndex: info.index });
-          }
-        },
-        onEndDrag: () => {
-          // You can sometimes have started a drag and yet not captured the
-          // pan (because you don't capture the responder during onStart but
-          // do during onMove, and yet the user hasn't moved). In those cases,
-          // you need to reset everything so that items become !isActive.
-          // In cases where you DID capture the pan, this function is a no-op
-          // because we'll end the drag when it really ends (since we've
-          // captured it). This all is necessary because the way the user
-          // decided to call onStartDrag is likely in response to an onPressIn,
-          // which then triggers on onPressOut the moment we capture (thus
-          // leading to a premature call to onEndDrag here).
-          if (activeKey.current !== null && !panGrantedRef.current) {
-            reset();
-          }
-        },
+        onDragStart,
+        onStartDrag: onDragStart,
+        onDragEnd,
+        onEndDrag: onDragEnd,
         isActive,
       });
     },

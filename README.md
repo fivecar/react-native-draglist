@@ -41,8 +41,8 @@ All `FlatList` properties are supported, with the following extensions/modificat
 
 |Field|Type|Note|
 |--|--|--|
-|`onStartDrag`|`() => void`|Your item should call this function when you detect a drag starting (i.e. when the user wants to begin reordering the list). A common implementation is to have a drag handle on your item whose `onPressIn` calls `onStartDrag`. Alternatively, you could have an `onLongPress` call this, or use any other mechanism that makes most sense for your UI. *DragList* will not start rendering items as being dragged until you call this.
-|`onEndDrag`|`() => void`|Your item should call this function when you detect a tap or drag ending. A common implementation is to have a drag handle whose `onPressOut` calls `onEndDrag`. If you don't call this during `onPressOut`, *DragList* will not not realize your item is no longer active if the user taps but doesn't drag (because you will have called `onStartDrag`, and yet *DragList* couldn't capture the pan responder from you because the user hasn't moved, thus it doesn't know when the user releases).
+|`onDragStart`|`() => void`|Your item should call this function when you detect a drag starting (i.e. when the user wants to begin reordering the list). A common implementation is to have a drag handle on your item whose `onPressIn` calls `onDragStart`. Alternatively, you could have an `onLongPress` call this, or use any other mechanism that makes most sense for your UI. *DragList* will not start rendering items as being dragged until you call this.
+|`onDragEnd`|`() => void`|Your item should call this function when you detect a tap or drag ending. A common implementation is to have a drag handle whose `onPressOut` calls `onDragEnd`. If you don't call this during `onPressOut`, *DragList* will not not realize your item is no longer active if the user taps but doesn't drag (because you will have called `onDragStart`, and yet *DragList* couldn't capture the pan responder from you because the user hasn't moved, thus it doesn't know when the user releases).
 |`isActive`|`boolean`|This is `true` iff the current item is actively being dragged by the user. This can be used to render the item differently while it's being dragged (e.g. less opacity, different background color, borders, etc).
 
 - `async onReordered(fromIndex: number, toIndex: number)` is called once the user drops a dragged item in its new position. This is *not called* if the user drops the item back in the spot it started. `DragList` will await this function, and not reset its UI until it completes, so that you can make modifications to the underlying data before the list resets its state.
@@ -52,7 +52,7 @@ All `FlatList` properties are supported, with the following extensions/modificat
 - `ref: React.RefObject<FlatList<T>>` (optional): You can optionally pass a ref, which DragList will tunnel through to the underlying FlatList (via `forwardRef`). This is useful, for instance, if you want to `scrollToIndex` yourself on the underlying list.
 
 ## Typical Flow
-1. Set up `DragList` much like you do any `FlatList`, except with a `renderItem` that calls `onStartDrag` at the appropriate time and `onEndDrag` in `onPressOut`.
+1. Set up `DragList` much like you do any `FlatList`, except with a `renderItem` that calls `onDragStart` at the appropriate time and `onDragEnd` in `onPressOut`.
 2. When `onReordered` gets called, update the ordering of `data`.
 
 That's basically it.
@@ -74,13 +74,13 @@ export default function DraggableLyrics() {
   }
 
   function renderItem(info: DragListRenderItemInfo<string>) {
-    const {item, onStartDrag, onEndDrag, isActive} = info;
+    const {item, onDragStart, onDragEnd, isActive} = info;
 
     return (
       <TouchableOpacity
         key={item}
-        onPressIn={onStartDrag}
-        onPressOut={onEndDrag}>
+        onPressIn={onDragStart}
+        onPressOut={onDragEnd}>
         <Text>{item}</Text>
       </TouchableOpacity>
     );

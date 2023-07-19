@@ -67,24 +67,23 @@ interface ExtraData {
 
 interface Props<T> extends Omit<FlatListProps<T>, "renderItem"> {
   data: T[];
+  ref?: React.ForwardedRef<FlatList<T>>;
   keyExtractor: (item: T) => string;
   renderItem: (info: DragListRenderItemInfo<T>) => React.ReactElement | null;
   containerStyle?: StyleProp<ViewStyle>;
   onDragBegin?: () => void;
   onDragEnd?: () => void;
-  onHoverChanged?: (hoverIndex: number) => Promise<void>;
-  onReordered?: (fromIndex: number, toIndex: number) => Promise<void>;
+  onHoverChanged?: (hoverIndex: number) => Promise<void> | void;
+  onReordered?: (fromIndex: number, toIndex: number) => Promise<void> | void;
   onScroll?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
   onLayout?: (e: LayoutChangeEvent) => void;
 }
 
-function DragListImpl<T>(
-  props: Props<T>,
-  externalRef: React.ForwardedRef<FlatList<T>>
-) {
+function DragListImpl<T>(props: Props<T>) {
   const {
     containerStyle,
     data,
+    ref,
     keyExtractor,
     onDragBegin,
     onDragEnd,
@@ -315,11 +314,11 @@ function DragListImpl<T>(
         <FlatList
           ref={r => {
             flatRef.current = r;
-            if (!!externalRef) {
-              if (typeof externalRef === "function") {
-                externalRef(r);
+            if (!!ref) {
+              if (typeof ref === "function") {
+                ref(r);
               } else {
-                externalRef.current = r;
+                ref.current = r;
               }
             }
           }}
@@ -428,9 +427,10 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
   );
 }
 
-// This preserves Typescript generic types through the export of forwardRef().
-type ForwardRefFn<R> = <P = {}>(
-  p: P & React.RefAttributes<R>
-) => React.ReactElement | null;
+interface WithForwardRefType extends React.FC<Props<any>> {
+  <T>(props: Props<T>): ReturnType<React.FC<Props<T>>>;
+}
 
-export default React.forwardRef(DragListImpl) as ForwardRefFn<FlatList>;
+const DragList: WithForwardRefType = React.forwardRef(DragListImpl);
+
+export default DragList;

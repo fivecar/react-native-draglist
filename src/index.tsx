@@ -72,8 +72,8 @@ interface Props<T> extends Omit<FlatListProps<T>, "renderItem"> {
   containerStyle?: StyleProp<ViewStyle>;
   onDragBegin?: () => void;
   onDragEnd?: () => void;
-  onHoverChanged?: (hoverIndex: number) => Promise<void>;
-  onReordered?: (fromIndex: number, toIndex: number) => Promise<void>;
+  onHoverChanged?: (hoverIndex: number) => Promise<void> | void;
+  onReordered?: (fromIndex: number, toIndex: number) => Promise<void> | void;
   onScroll?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
   onLayout?: (e: LayoutChangeEvent) => void;
 }

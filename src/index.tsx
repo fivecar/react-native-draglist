@@ -95,6 +95,7 @@ function DragListImpl<T>(props: Props<T>) {
   // activeKey and activeIndex track the item being dragged
   const activeKey = useRef<string | null>(null);
   const activeIndex = useRef(-1);
+  const reorderingRef = useRef(false);
   // panIndex tracks the location where the dragged item would go if dropped
   const panIndex = useRef(-1);
   const [extra, setExtra] = useState<ExtraData>({
@@ -119,10 +120,14 @@ function DragListImpl<T>(props: Props<T>) {
   const pan = useRef(new Animated.Value(0)).current;
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponderCapture: () => !!activeKey.current,
-      onStartShouldSetPanResponder: () => !!activeKey.current,
-      onMoveShouldSetPanResponder: () => !!activeKey.current,
-      onMoveShouldSetPanResponderCapture: () => !!activeKey.current,
+      onStartShouldSetPanResponderCapture: () =>
+        !!activeKey.current && !reorderingRef.current,
+      onStartShouldSetPanResponder: () =>
+        !!activeKey.current && !reorderingRef.current,
+      onMoveShouldSetPanResponder: () =>
+        !!activeKey.current && !reorderingRef.current,
+      onMoveShouldSetPanResponderCapture: () =>
+        !!activeKey.current && !reorderingRef.current,
       onPanResponderGrant: (_, gestate) => {
         pan.setValue(gestate.dy);
         panGrantedRef.current = true;
@@ -208,7 +213,18 @@ function DragListImpl<T>(props: Props<T>) {
             panIndex.current > activeIndex.current
           )
         ) {
-          await reorderRef.current?.(activeIndex.current, panIndex.current);
+          try {
+            // We serialize reordering so that we don't capture any new pan
+            // attempts during this time. Otherwise, onReordered could be called
+            // with indices that would be stale if you panned several times
+            // quickly (e.g. if onReordered deletes an item, the next
+            // onReordered call would be made on a list whose indices are
+            // stale).
+            reorderingRef.current = true;
+            await reorderRef.current?.(activeIndex.current, panIndex.current);
+          } finally {
+            reorderingRef.current = false;
+          }
         }
         reset();
       },

@@ -127,7 +127,7 @@ function DragListImpl<T>(props: Props<T>) {
         pan.setValue(gestate.dy);
         panGrantedRef.current = true;
 
-        flatWrapRef.current?.measureInWindow((x, y) => {
+        flatWrapRef.current?.measure((x, y) => {
           // Capture the latest y position upon starting a drag, because the
           // window could have moved since we last measured. Remember that moves
           // without resizes _don't_ generate onLayout, so we need to actively

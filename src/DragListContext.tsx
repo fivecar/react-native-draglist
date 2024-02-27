@@ -17,6 +17,7 @@ type ContextProps<T> = {
   pan: Animated.Value;
   panIndex: number;
   layouts: LayoutCache;
+  horizontal: boolean | null | undefined;
   children: React.ReactNode;
 };
 
@@ -33,11 +34,12 @@ export function DragListProvider<T>({
   pan,
   panIndex,
   layouts,
+  horizontal,
   children,
 }: ContextProps<T>) {
   const value = useMemo(
-    () => ({ activeKey, activeIndex, keyExtractor, pan, panIndex, layouts }),
-    [activeKey, activeIndex, keyExtractor, pan, panIndex, layouts],
+    () => ({ activeKey, activeIndex, keyExtractor, pan, panIndex, layouts, horizontal }),
+    [activeKey, activeIndex, keyExtractor, pan, panIndex, layouts, horizontal],
   );
 
   return (

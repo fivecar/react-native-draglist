@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   Animated,
   Easing,
@@ -79,7 +85,9 @@ interface Props<T> extends Omit<FlatListProps<T>, "renderItem"> {
   onLayout?: (e: LayoutChangeEvent) => void;
 }
 
-function DragListImpl<T>(props: Props<T>) {
+function DragListImpl<T>(
+  props: Props<T> & { ref: React.ForwardedRef<FlatList<T>> }
+) {
   const {
     containerStyle,
     data,
@@ -127,7 +135,7 @@ function DragListImpl<T>(props: Props<T>) {
         pan.setValue(gestate.dy);
         panGrantedRef.current = true;
 
-        flatWrapRef.current?.measureInWindow((x, y) => {
+        flatWrapRef.current?.measure((x, y) => {
           // Capture the latest y position upon starting a drag, because the
           // window could have moved since we last measured. Remember that moves
           // without resizes _don't_ generate onLayout, so we need to actively
@@ -427,10 +435,8 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
   );
 }
 
-interface WithForwardRefType extends React.FC<Props<any>> {
-  <T>(props: Props<T>): ReturnType<React.FC<Props<T>>>;
-}
-
-const DragList: WithForwardRefType = React.forwardRef(DragListImpl);
+const DragList = forwardRef<FlatList<any>, Props<any>>((props, ref) => (
+  <DragListImpl {...props} ref={ref} />
+));
 
 export default DragList;

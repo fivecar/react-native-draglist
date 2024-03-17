@@ -18,6 +18,7 @@ export default function DraggableLyrics() {
       .map(num => SOUND_OF_SILENCE.map(word => `${word}${num}`))
       .flat(),
   );
+  const [horzData, setHorzData] = useState(['a', 'b', 'c', 'd', 'e', 'f', 'g']);
   const listRef = React.useRef<FlatList<string>>(null);
 
   function keyExtractor(str: string) {
@@ -54,6 +55,14 @@ export default function DraggableLyrics() {
     setScrollData(copy);
   }
 
+  async function onReorderedHorz(fromIndex: number, toIndex: number) {
+    const copy = [...horzData]; // Don't modify react data in-place
+    const removed = copy.splice(fromIndex, 1);
+
+    copy.splice(toIndex, 0, removed[0]); // Now insert at the new pos
+    setHorzData(copy);
+  }
+
   return (
     <View style={styles.container}>
       <Text style={styles.header}>Basic List</Text>
@@ -85,6 +94,14 @@ export default function DraggableLyrics() {
       <Button
         onPress={() => listRef.current?.scrollToIndex({index: 0})}
         title="Scroll to Top"
+      />
+      <Text style={styles.header}>Horizontal List</Text>
+      <DragList
+        data={horzData}
+        horizontal
+        keyExtractor={keyExtractor}
+        onReordered={onReorderedHorz}
+        renderItem={renderItem}
       />
     </View>
   );

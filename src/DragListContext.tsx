@@ -1,11 +1,18 @@
 // Much of this comes from concepts in https://github.com/computerjazz/react-native-draggable-flatlist/blob/main/src/context/draggableFlatListContext.tsx
 import React, { useContext, useMemo } from "react";
-import { Animated, LayoutRectangle } from "react-native";
+import { Animated } from "react-native";
+
+// Tracks the position and extent (width or height) in an axis-independent way
+// (i.e. if horizontal, then pos is an x and extent is a width).
+export interface PosExtent {
+  pos: number; // The x or y position
+  extent: number; // The width or height
+}
 
 // A map of each item's layout rectangle, used to calculate how much space to
 // make for an item being dragged.
 export interface LayoutCache {
-  [key: string]: LayoutRectangle;
+  [key: string]: PosExtent;
 }
 
 // This all basically enables us to pass data into a CellRendererComponent,

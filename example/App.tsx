@@ -70,6 +70,16 @@ export default function DraggableLyrics() {
         data={scrollData}
         keyExtractor={keyExtractor}
         onReordered={onScrollReordered}
+        ListHeaderComponent={() => (
+          <View>
+            <Text>Drag my header</Text>
+          </View>
+        )}
+        ListFooterComponent={() => (
+          <View>
+            <Text>Drag my footer</Text>
+          </View>
+        )}
         renderItem={renderItem}
       />
       <Button

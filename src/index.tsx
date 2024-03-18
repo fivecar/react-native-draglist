@@ -128,7 +128,11 @@ function DragListImpl<T>(props: Props<T> & { ref: React.ForwardedRef<FlatList<T>
       onMoveShouldSetPanResponderCapture: () =>
         !!activeKey.current && !reorderingRef.current,
       onPanResponderGrant: (_, gestate) => {
-        pan.setValue(gestate.dy);
+        if (props.horizontal) {
+          pan.setValue(gestate.dx);
+        } else {
+          pan.setValue(gestate.dy);
+        }
         panGrantedRef.current = true;
 
         flatWrapRef.current?.measure((pageX, pageY) => {
@@ -148,26 +152,44 @@ function DragListImpl<T>(props: Props<T> & { ref: React.ForwardedRef<FlatList<T>
         onDragBegin?.();
       },
       onPanResponderMove: (_, gestate) => {
+        const wrapX = gestate.x0 + gestate.dx - flatWrapLayout.current.x;
         const wrapY = gestate.y0 + gestate.dy - flatWrapLayout.current.y;
+        const clientX = wrapX + scrollPos.current;
         const clientY = wrapY + scrollPos.current;
 
         if (activeKey.current && layouts.hasOwnProperty(activeKey.current)) {
+          const dragItemWidth = layouts[activeKey.current].width;
           const dragItemHeight = layouts[activeKey.current].height;
-          const topEdge = wrapY - dragItemHeight / 2;
-          const bottomEdge = wrapY + dragItemHeight / 2;
+          const edgeX1 = wrapX - dragItemWidth / 2;
+          const edgeY1 = wrapY - dragItemHeight / 2;
+          const edgeX2 = wrapX + dragItemWidth / 2;
+          const edgeY2 = wrapY + dragItemHeight / 2;
           let offset = 0;
 
           // We auto-scroll the FlatList a bit when you drag off the top or
           // bottom edge. These calculations can be a bit finnicky. You need to
           // consider client coordinates and coordinates relative to the screen.
-          if (topEdge < 0) {
-            offset =
-              scrollPos.current >= dragItemHeight
-                ? -dragItemHeight
-                : -scrollPos.current;
-          } else if (bottomEdge > flatWrapLayout.current.height) {
-            offset = scrollPos.current + dragItemHeight;
+
+          if (props.horizontal) {
+            if (edgeX1 < 0) {
+              offset =
+                scrollPos.current >= dragItemWidth
+                  ? -dragItemWidth
+                  : -scrollPos.current;
+            } else if (edgeX2 > flatWrapLayout.current.width) {
+              offset = scrollPos.current + dragItemWidth;
+            }
+          } else {
+            if (edgeY1 < 0) {
+              offset =
+                scrollPos.current >= dragItemHeight
+                  ? -dragItemHeight
+                  : -scrollPos.current;
+            } else if (edgeY2 > flatWrapLayout.current.height) {
+              offset = scrollPos.current + dragItemHeight;
+            }
           }
+
           if (offset !== 0) {
             flatRef.current?.scrollToOffset({
               animated: true,
@@ -185,8 +207,10 @@ function DragListImpl<T>(props: Props<T> & { ref: React.ForwardedRef<FlatList<T>
             curIndex < dataRef.current.length &&
             layouts.hasOwnProperty(
               (key = keyExtractor(dataRef.current[curIndex]))
-            ) &&
-            layouts[key].y + layouts[key].height < clientY
+            ) && (
+              (props.horizontal && (layouts[key].x + layouts[key].width < clientX))
+              || (!props.horizontal && (layouts[key].y + layouts[key].height < clientY))
+            )
           ) {
             curIndex++;
           }
@@ -194,9 +218,15 @@ function DragListImpl<T>(props: Props<T> & { ref: React.ForwardedRef<FlatList<T>
           // Note that the pan value assumes you're dragging the item by its
           // vertical center. We could potentially be more awesome by asking
           // onStartDrag to pass us the relative y position of the drag handle.
-          pan.setValue(
-            clientY - (layouts[activeKey.current].y + dragItemHeight / 2)
-          );
+          if (props.horizontal) {
+            pan.setValue(
+              clientX - (layouts[activeKey.current].x + dragItemWidth / 2)
+            );
+          } else {
+            pan.setValue(
+              clientY - (layouts[activeKey.current].y + dragItemHeight / 2)
+            );
+          }
 
           // This simply exists to trigger a re-render.
           if (panIndex.current != curIndex) {
@@ -294,7 +324,11 @@ function DragListImpl<T>(props: Props<T> & { ref: React.ForwardedRef<FlatList<T>
 
   const onDragScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      scrollPos.current = event.nativeEvent.contentOffset.y;
+      if (props.horizontal) {
+        scrollPos.current = event.nativeEvent.contentOffset.x;
+      } else {
+        scrollPos.current = event.nativeEvent.contentOffset.y;
+      }
       if (onScroll) {
         onScroll(event);
       }
@@ -323,6 +357,7 @@ function DragListImpl<T>(props: Props<T> & { ref: React.ForwardedRef<FlatList<T>
       pan={pan}
       panIndex={panIndex.current}
       layouts={layouts}
+      horizontal={props.horizontal}
     >
       <View
         ref={flatWrapRef}
@@ -369,7 +404,7 @@ type CellRendererProps<T> = {
 
 function CellRendererComponent<T>(props: CellRendererProps<T>) {
   const { item, index, children, style, onLayout, ...rest } = props;
-  const { keyExtractor, activeKey, activeIndex, pan, panIndex, layouts } =
+  const { keyExtractor, activeKey, activeIndex, pan, panIndex, layouts, horizontal } =
     useDragListContext<T>();
   const [isOffset, setIsOffset] = useState(false); // Whether anim != 0
   const key = keyExtractor(item, index);
@@ -383,7 +418,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
         Animated.timing(anim, {
           duration: SLIDE_MILLIS,
           easing: Easing.inOut(Easing.linear),
-          toValue: layouts[activeKey].height,
+          toValue: horizontal ? layouts[activeKey].width : layouts[activeKey].height,
           useNativeDriver: true,
         }).start();
         setIsOffset(true);
@@ -392,7 +427,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
         Animated.timing(anim, {
           duration: SLIDE_MILLIS,
           easing: Easing.inOut(Easing.linear),
-          toValue: -layouts[activeKey].height,
+          toValue: horizontal ? -layouts[activeKey].width : -layouts[activeKey].height,
           useNativeDriver: true,
         }).start();
         setIsOffset(true);
@@ -403,7 +438,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
       anim.setValue(0);
     }
     setIsOffset(false);
-  }, [activeKey, index, panIndex, key, activeIndex]);
+  }, [activeKey, index, panIndex, key, activeIndex, horizontal]);
 
   useEffect(() => {
     if (!isOffset) {
@@ -435,9 +470,9 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
           ? {
               elevation: 1,
               zIndex: 999,
-              transform: [{ translateY: pan }],
+              transform: [ horizontal ? { translateX: pan } : { translateY: pan } ],
             }
-          : { elevation: 0, zIndex: 0, transform: [{ translateY: anim }] },
+          : { elevation: 0, zIndex: 0, transform: [horizontal ? { translateX: anim } : { translateY: anim }] },
       ]}
       onLayout={onCellLayout}
     >

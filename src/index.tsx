@@ -1,4 +1,4 @@
-import React, { forwardRef, useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Animated,
   Easing,
@@ -79,12 +79,12 @@ interface Props<T> extends Omit<FlatListProps<T>, "renderItem"> {
 }
 
 function DragListImpl<T>(
-  props: Props<T> & { ref: React.ForwardedRef<FlatList<T>> }
+  props: Props<T>,
+  ref?: React.ForwardedRef<FlatList<T>> | null
 ) {
   const {
     containerStyle,
     data,
-    ref,
     keyExtractor,
     onDragBegin,
     onDragEnd,
@@ -476,6 +476,12 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
   );
 }
 
-const DragList = forwardRef<FlatList<any>, Props<any>>((props, ref) => <DragListImpl {...props} ref={ref} />);
+declare module "react" {
+  function forwardRef<T, P = {}>(
+    render: (props: P, ref: React.Ref<T>) => React.ReactNode | null
+  ): (props: P & React.RefAttributes<T>) => JSX.Element | null;
+}
+
+const DragList = React.forwardRef(DragListImpl);
 
 export default DragList;

@@ -5,7 +5,6 @@ import {
   FlatList,
   FlatListProps,
   LayoutChangeEvent,
-  LayoutRectangle,
   ListRenderItemInfo,
   NativeScrollEvent,
   NativeSyntheticEvent,
@@ -19,6 +18,7 @@ import {
 import {
   DragListProvider,
   LayoutCache,
+  PosExtent,
   useDragListContext,
 } from "./DragListContext";
 
@@ -78,7 +78,9 @@ interface Props<T> extends Omit<FlatListProps<T>, "renderItem"> {
   onLayout?: (e: LayoutChangeEvent) => void;
 }
 
-function DragListImpl<T>(props: Props<T> & { ref: React.ForwardedRef<FlatList<T>> }) {
+function DragListImpl<T>(
+  props: Props<T> & { ref: React.ForwardedRef<FlatList<T>> }
+) {
   const {
     containerStyle,
     data,
@@ -108,11 +110,9 @@ function DragListImpl<T>(props: Props<T> & { ref: React.ForwardedRef<FlatList<T>
   const reorderRef = useRef(props.onReordered);
   const flatRef = useRef<FlatList<T> | null>(null);
   const flatWrapRef = useRef<View>(null);
-  const flatWrapLayout = useRef<LayoutRectangle>({
-    x: 0,
-    y: 0,
-    width: 1,
-    height: 1,
+  const flatWrapLayout = useRef<PosExtent>({
+    pos: 0,
+    extent: 1,
   });
   const scrollPos = useRef(0);
   // pan is the drag dy
@@ -144,50 +144,35 @@ function DragListImpl<T>(props: Props<T> & { ref: React.ForwardedRef<FlatList<T>
           // height can come back 0.
           flatWrapLayout.current = {
             ...flatWrapLayout.current,
-            x: pageX,
-            y: pageY,
+            pos: props.horizontal ? pageX : pageY,
           };
         });
 
         onDragBegin?.();
       },
       onPanResponderMove: (_, gestate) => {
-        const wrapX = gestate.x0 + gestate.dx - flatWrapLayout.current.x;
-        const wrapY = gestate.y0 + gestate.dy - flatWrapLayout.current.y;
-        const clientX = wrapX + scrollPos.current;
-        const clientY = wrapY + scrollPos.current;
+        const posOrigin = props.horizontal ? gestate.x0 : gestate.y0;
+        const pos = props.horizontal ? gestate.dx : gestate.dy;
+        const wrapPos = posOrigin + pos - flatWrapLayout.current.pos;
+        const clientPos = wrapPos + scrollPos.current;
 
         if (activeKey.current && layouts.hasOwnProperty(activeKey.current)) {
-          const dragItemWidth = layouts[activeKey.current].width;
-          const dragItemHeight = layouts[activeKey.current].height;
-          const edgeX1 = wrapX - dragItemWidth / 2;
-          const edgeY1 = wrapY - dragItemHeight / 2;
-          const edgeX2 = wrapX + dragItemWidth / 2;
-          const edgeY2 = wrapY + dragItemHeight / 2;
+          const dragItemExtent = layouts[activeKey.current].extent;
+          const leadingEdge = wrapPos - dragItemExtent / 2;
+          const trailingEdge = wrapPos + dragItemExtent / 2;
           let offset = 0;
 
           // We auto-scroll the FlatList a bit when you drag off the top or
-          // bottom edge. These calculations can be a bit finnicky. You need to
-          // consider client coordinates and coordinates relative to the screen.
-
-          if (props.horizontal) {
-            if (edgeX1 < 0) {
-              offset =
-                scrollPos.current >= dragItemWidth
-                  ? -dragItemWidth
-                  : -scrollPos.current;
-            } else if (edgeX2 > flatWrapLayout.current.width) {
-              offset = scrollPos.current + dragItemWidth;
-            }
-          } else {
-            if (edgeY1 < 0) {
-              offset =
-                scrollPos.current >= dragItemHeight
-                  ? -dragItemHeight
-                  : -scrollPos.current;
-            } else if (edgeY2 > flatWrapLayout.current.height) {
-              offset = scrollPos.current + dragItemHeight;
-            }
+          // bottom edge (or right/left for horizontal ones). These calculations
+          // can be a bit finnicky. You need to consider client coordinates and
+          // coordinates relative to the screen.
+          if (leadingEdge < 0) {
+            offset =
+              scrollPos.current >= dragItemExtent
+                ? -dragItemExtent
+                : -scrollPos.current;
+          } else if (trailingEdge > flatWrapLayout.current.extent) {
+            offset = scrollPos.current + dragItemExtent;
           }
 
           if (offset !== 0) {
@@ -207,26 +192,18 @@ function DragListImpl<T>(props: Props<T> & { ref: React.ForwardedRef<FlatList<T>
             curIndex < dataRef.current.length &&
             layouts.hasOwnProperty(
               (key = keyExtractor(dataRef.current[curIndex]))
-            ) && (
-              (props.horizontal && (layouts[key].x + layouts[key].width < clientX))
-              || (!props.horizontal && (layouts[key].y + layouts[key].height < clientY))
-            )
+            ) &&
+            layouts[key].pos + layouts[key].extent < clientPos
           ) {
             curIndex++;
           }
 
           // Note that the pan value assumes you're dragging the item by its
-          // vertical center. We could potentially be more awesome by asking
+          // center. We could potentially be more awesome by asking
           // onStartDrag to pass us the relative y position of the drag handle.
-          if (props.horizontal) {
-            pan.setValue(
-              clientX - (layouts[activeKey.current].x + dragItemWidth / 2)
-            );
-          } else {
-            pan.setValue(
-              clientY - (layouts[activeKey.current].y + dragItemHeight / 2)
-            );
-          }
+          pan.setValue(
+            clientPos - (layouts[activeKey.current].pos + dragItemExtent / 2)
+          );
 
           // This simply exists to trigger a re-render.
           if (panIndex.current != curIndex) {
@@ -324,11 +301,9 @@ function DragListImpl<T>(props: Props<T> & { ref: React.ForwardedRef<FlatList<T>
 
   const onDragScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      if (props.horizontal) {
-        scrollPos.current = event.nativeEvent.contentOffset.x;
-      } else {
-        scrollPos.current = event.nativeEvent.contentOffset.y;
-      }
+      scrollPos.current = props.horizontal
+        ? event.nativeEvent.contentOffset.x
+        : event.nativeEvent.contentOffset.y;
       if (onScroll) {
         onScroll(event);
       }
@@ -341,7 +316,9 @@ function DragListImpl<T>(props: Props<T> & { ref: React.ForwardedRef<FlatList<T>
       flatWrapRef.current?.measure((_x, _y, width, height, pageX, pageY) => {
         // Even though we capture x/y during onPanResponderGrant, we still
         // capture height here because measureInWindow can return 0 height.
-        flatWrapLayout.current = { x: pageX, y: pageY, width, height };
+        flatWrapLayout.current = props.horizontal
+          ? { pos: pageX, extent: width }
+          : { pos: pageY, extent: height };
       });
       if (onLayout) {
         onLayout(evt);
@@ -404,8 +381,15 @@ type CellRendererProps<T> = {
 
 function CellRendererComponent<T>(props: CellRendererProps<T>) {
   const { item, index, children, style, onLayout, ...rest } = props;
-  const { keyExtractor, activeKey, activeIndex, pan, panIndex, layouts, horizontal } =
-    useDragListContext<T>();
+  const {
+    keyExtractor,
+    activeKey,
+    activeIndex,
+    pan,
+    panIndex,
+    layouts,
+    horizontal,
+  } = useDragListContext<T>();
   const [isOffset, setIsOffset] = useState(false); // Whether anim != 0
   const key = keyExtractor(item, index);
   const isActive = key === activeKey;
@@ -418,7 +402,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
         Animated.timing(anim, {
           duration: SLIDE_MILLIS,
           easing: Easing.inOut(Easing.linear),
-          toValue: horizontal ? layouts[activeKey].width : layouts[activeKey].height,
+          toValue: layouts[activeKey].extent,
           useNativeDriver: true,
         }).start();
         setIsOffset(true);
@@ -427,7 +411,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
         Animated.timing(anim, {
           duration: SLIDE_MILLIS,
           easing: Easing.inOut(Easing.linear),
-          toValue: horizontal ? -layouts[activeKey].width : -layouts[activeKey].height,
+          toValue: -layouts[activeKey].extent,
           useNativeDriver: true,
         }).start();
         setIsOffset(true);
@@ -456,7 +440,10 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
       onLayout(evt);
     }
 
-    layouts[key] = { ...evt.nativeEvent.layout };
+    const layout = evt.nativeEvent.layout;
+    layouts[key] = horizontal
+      ? { pos: layout.x, extent: layout.width }
+      : { pos: layout.y, extent: layout.height };
   }
 
   return (
@@ -470,9 +457,17 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
           ? {
               elevation: 1,
               zIndex: 999,
-              transform: [ horizontal ? { translateX: pan } : { translateY: pan } ],
+              transform: [
+                horizontal ? { translateX: pan } : { translateY: pan },
+              ],
             }
-          : { elevation: 0, zIndex: 0, transform: [horizontal ? { translateX: anim } : { translateY: anim }] },
+          : {
+              elevation: 0,
+              zIndex: 0,
+              transform: [
+                horizontal ? { translateX: anim } : { translateY: anim },
+              ],
+            },
       ]}
       onLayout={onCellLayout}
     >

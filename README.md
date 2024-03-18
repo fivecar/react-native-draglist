@@ -21,9 +21,7 @@ Great question. `react-native-draggable-flatlist` has silky-smooth animations, s
 ## What Is `react-native-draglist`
 This package is a basic version of `react-native-draggable-flatlist` without dependencies on anything except `react` and `react-native`. Specifically, it is deliberately built to avoid `react-native-reanimated` and its hanging/crashing issues.
 
-It is limited in the following ways:
-- It does not animate as smoothly (though it does `useNativeDriver`)
-- It only handles vertical lists (though adding horizontal in a PR won't be hard)
+It is limited in that it does not animate as smoothly (though it does `useNativeDriver`). It supports both vertical and horizontal lists.
 
 # Installation
 With no dependencies outside of `react-native` and `react`, this package installs easily:
@@ -48,7 +46,7 @@ All `FlatList` properties are supported, with the following extensions/modificat
 - `async onReordered(fromIndex: number, toIndex: number)` is called once the user drops a dragged item in its new position. This is *not called* if the user drops the item back in the spot it started. `DragList` will await this function, and not reset its UI until it completes, so that you can make modifications to the underlying data before the list resets its state.
   - `fromIndex` will be between `0` and `data.length` (the total number of items you gave `DragList` to render).
   - `toIndex` reflects the position to which the item should be moved in the pre-modified `data`. It will never equal `fromIndex`. So, for instance, if `toIndex` is `0`, you should make `data[fromIndex]` the first element of `data`. **Note**: if the user drags the item to the very end of the list, `toIndex` will equal `data.length` (i.e. it will reference an index that is one beyond the end of the list).
-- `onHoverChanged(index: number)` (optional): called whenever an item being dragged changes its index in the list. Note this is only called when the item hasn't been dropped into its final (potentially new) index yet — it's only called as the item hovers around various indicies that it could be dropped at.
+- `onHoverChanged(index: number)` (optional): called whenever an item being dragged changes its index in the list. Note this is only called when the item hasn't been dropped into its final (potentially new) index yet — it's only called as the item hovers around various indices that it could be dropped at.
 - `ref: React.RefObject<FlatList<T>>` (optional): You can optionally pass a ref, which DragList will tunnel through to the underlying FlatList (via `forwardRef`). This is useful, for instance, if you want to `scrollToIndex` yourself on the underlying list.
 
 ## Typical Flow
@@ -113,7 +111,7 @@ To play with the list, you can run the example within `example/` in order to tes
 ```console
 npm install
 cd example
-npm install
+npm install   # You also need to run this whenever you edit the DragList code.
 npm run android   # or `npm run ios`, which takes longer to build
 ```
 

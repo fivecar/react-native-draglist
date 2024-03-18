@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { forwardRef, useCallback, useEffect, useRef, useState } from "react";
 import {
   Animated,
   Easing,
@@ -67,7 +67,6 @@ interface ExtraData {
 
 interface Props<T> extends Omit<FlatListProps<T>, "renderItem"> {
   data: T[];
-  ref?: React.ForwardedRef<FlatList<T>>;
   keyExtractor: (item: T) => string;
   renderItem: (info: DragListRenderItemInfo<T>) => React.ReactElement | null;
   containerStyle?: StyleProp<ViewStyle>;
@@ -79,7 +78,7 @@ interface Props<T> extends Omit<FlatListProps<T>, "renderItem"> {
   onLayout?: (e: LayoutChangeEvent) => void;
 }
 
-function DragListImpl<T>(props: Props<T>, reference: React.ForwardedRef<FlatList<T>>) {
+function DragListImpl<T>(props: Props<T> & { ref: React.ForwardedRef<FlatList<T>> }) {
   const {
     containerStyle,
     data,
@@ -95,6 +94,7 @@ function DragListImpl<T>(props: Props<T>, reference: React.ForwardedRef<FlatList
   // activeKey and activeIndex track the item being dragged
   const activeKey = useRef<string | null>(null);
   const activeIndex = useRef(-1);
+  const reorderingRef = useRef(false);
   // panIndex tracks the location where the dragged item would go if dropped
   const panIndex = useRef(-1);
   const [extra, setExtra] = useState<ExtraData>({
@@ -119,10 +119,14 @@ function DragListImpl<T>(props: Props<T>, reference: React.ForwardedRef<FlatList
   const pan = useRef(new Animated.Value(0)).current;
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponderCapture: () => !!activeKey.current,
-      onStartShouldSetPanResponder: () => !!activeKey.current,
-      onMoveShouldSetPanResponder: () => !!activeKey.current,
-      onMoveShouldSetPanResponderCapture: () => !!activeKey.current,
+      onStartShouldSetPanResponderCapture: () =>
+        !!activeKey.current && !reorderingRef.current,
+      onStartShouldSetPanResponder: () =>
+        !!activeKey.current && !reorderingRef.current,
+      onMoveShouldSetPanResponder: () =>
+        !!activeKey.current && !reorderingRef.current,
+      onMoveShouldSetPanResponderCapture: () =>
+        !!activeKey.current && !reorderingRef.current,
       onPanResponderGrant: (_, gestate) => {
         if (props.horizontal) {
           pan.setValue(gestate.dx);
@@ -131,14 +135,18 @@ function DragListImpl<T>(props: Props<T>, reference: React.ForwardedRef<FlatList
         }
         panGrantedRef.current = true;
 
-        flatWrapRef.current?.measureInWindow((x, y) => {
+        flatWrapRef.current?.measure((pageX, pageY) => {
           // Capture the latest y position upon starting a drag, because the
           // window could have moved since we last measured. Remember that moves
           // without resizes _don't_ generate onLayout, so we need to actively
           // measure here. React doesn't give a way to subscribe to move events.
           // We don't overwrite width/height from this measurement because
           // height can come back 0.
-          flatWrapLayout.current = { ...flatWrapLayout.current, x, y };
+          flatWrapLayout.current = {
+            ...flatWrapLayout.current,
+            x: pageX,
+            y: pageY,
+          };
         });
 
         onDragBegin?.();
@@ -238,7 +246,18 @@ function DragListImpl<T>(props: Props<T>, reference: React.ForwardedRef<FlatList
             panIndex.current > activeIndex.current
           )
         ) {
-          await reorderRef.current?.(activeIndex.current, panIndex.current);
+          try {
+            // We serialize reordering so that we don't capture any new pan
+            // attempts during this time. Otherwise, onReordered could be called
+            // with indices that would be stale if you panned several times
+            // quickly (e.g. if onReordered deletes an item, the next
+            // onReordered call would be made on a list whose indices are
+            // stale).
+            reorderingRef.current = true;
+            await reorderRef.current?.(activeIndex.current, panIndex.current);
+          } finally {
+            reorderingRef.current = false;
+          }
         }
         reset();
       },
@@ -462,10 +481,6 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
   );
 }
 
-interface WithForwardRefType extends React.FC<Props<any>> {
-  <T>(props: Props<T>): ReturnType<React.FC<Props<T>>>;
-}
-
-const DragList: WithForwardRefType = React.forwardRef(DragListImpl);
+const DragList = forwardRef<FlatList<any>, Props<any>>((props, ref) => <DragListImpl {...props} ref={ref} />);
 
 export default DragList;

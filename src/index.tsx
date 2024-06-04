@@ -44,13 +44,13 @@ export interface DragListRenderItemInfo<T> extends ListRenderItemInfo<T> {
    * @deprecated Use onDragStart instead
    * @see onDragStart
    */
-  onStartDrag: () => void;
+  onStartDrag?: () => void;
 
   /**
    * @deprecated Use onDragEnd instead
    * @see onDragEnd
    */
-  onEndDrag: () => void;
+  onEndDrag?: () => void;
 
   /**
    * Whether the item is being dragged at the moment.

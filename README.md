@@ -14,7 +14,7 @@ FlatList that can be reordered by dragging its items
 > Given [react-native-draggable-flatlist](https://github.com/computerjazz/react-native-draggable-flatlist/),
 > why is there also this package?
 
-Great question. `react-native-draggable-flatlist` has silky-smooth animations, supports horizontal lists as well, contains dozens of code files, and even manipulates internal data structures in [react-native-reanimated](https://github.com/software-mansion/react-native-reanimated) to make the animations work. You should absolutely use, and prefer, `react-native-draggable-flatlist`, if it works for you.
+Great question. `react-native-draggable-flatlist` has silky-smooth animations, contains dozens of code files, and even manipulates internal data structures in [react-native-reanimated](https://github.com/software-mansion/react-native-reanimated) to make the animations work. You should absolutely use, and prefer, `react-native-draggable-flatlist`, if it works for you.
 
 `react-native-draglist` exists because `react-native-reanimated`, which `react-native-draggable-flatlist` depends on, randomly hangs and crashes apps through a variety of [issues](https://github.com/software-mansion/react-native-reanimated/issues), several of which have not been fixed despite several major "stable" releases. Furthermore, the hangs and crashes are both frequent and hard to reliably reproduce, making their timely resolution unlikely.
 

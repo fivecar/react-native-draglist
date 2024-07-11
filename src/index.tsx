@@ -135,7 +135,7 @@ function DragListImpl<T>(
         }
         panGrantedRef.current = true;
 
-        flatWrapRef.current?.measure((pageX, pageY) => {
+        flatWrapRef.current?.measure((_x, _y, _width, _height, pageX, pageY) => {
           // Capture the latest y position upon starting a drag, because the
           // window could have moved since we last measured. Remember that moves
           // without resizes _don't_ generate onLayout, so we need to actively

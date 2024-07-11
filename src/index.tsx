@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Animated,
   Easing,
-  FlatList,
   FlatListProps,
   LayoutChangeEvent,
   ListRenderItemInfo,
@@ -10,6 +9,7 @@ import {
   NativeSyntheticEvent,
   PanResponder,
   Platform,
+  FlatList as RNFlatList,
   StyleProp,
   UIManager,
   View,
@@ -76,11 +76,12 @@ interface Props<T> extends Omit<FlatListProps<T>, "renderItem"> {
   onReordered?: (fromIndex: number, toIndex: number) => Promise<void> | void;
   onScroll?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
   onLayout?: (e: LayoutChangeEvent) => void;
+  FlatList?: typeof RNFlatList;
 }
 
 function DragListImpl<T>(
   props: Props<T>,
-  ref?: React.ForwardedRef<FlatList<T>> | null
+  ref?: React.ForwardedRef<RNFlatList<T>> | null
 ) {
   const {
     containerStyle,
@@ -91,6 +92,7 @@ function DragListImpl<T>(
     onScroll,
     onLayout,
     renderItem,
+    FlatList = RNFlatList,
     ...rest
   } = props;
   // activeKey and activeIndex track the item being dragged
@@ -108,7 +110,7 @@ function DragListImpl<T>(
   const panGrantedRef = useRef(false);
   const hoverRef = useRef(props.onHoverChanged);
   const reorderRef = useRef(props.onReordered);
-  const flatRef = useRef<FlatList<T> | null>(null);
+  const flatRef = useRef<RNFlatList<T> | null>(null);
   const flatWrapRef = useRef<View>(null);
   const flatWrapLayout = useRef<PosExtent>({
     pos: 0,
@@ -136,16 +138,16 @@ function DragListImpl<T>(
         panGrantedRef.current = true;
 
         flatWrapRef.current?.measure((_x, _y, _width, _height, pageX, pageY) => {
-          // Capture the latest y position upon starting a drag, because the
-          // window could have moved since we last measured. Remember that moves
-          // without resizes _don't_ generate onLayout, so we need to actively
-          // measure here. React doesn't give a way to subscribe to move events.
-          // We don't overwrite width/height from this measurement because
-          // height can come back 0.
-          flatWrapLayout.current = {
-            ...flatWrapLayout.current,
-            pos: props.horizontal ? pageX : pageY,
-          };
+            // Capture the latest y position upon starting a drag, because the
+            // window could have moved since we last measured. Remember that moves
+            // without resizes _don't_ generate onLayout, so we need to actively
+            // measure here. React doesn't give a way to subscribe to move events.
+            // We don't overwrite width/height from this measurement because
+            // height can come back 0.
+            flatWrapLayout.current = {
+              ...flatWrapLayout.current,
+              pos: props.horizontal ? pageX : pageY,
+            };
         });
 
         onDragBegin?.();

@@ -59,7 +59,7 @@ interface ExtraData {
 
 interface Props<T> extends Omit<FlatListProps<T>, "renderItem"> {
   data: T[];
-  keyExtractor: (item: T) => string;
+  keyExtractor: (item: T, index: number) => string;
   renderItem: (info: DragListRenderItemInfo<T>) => React.ReactElement | null;
   containerStyle?: StyleProp<ViewStyle>;
   onDragBegin?: () => void;
@@ -183,7 +183,7 @@ function DragListImpl<T>(
           while (
             curIndex < dataRef.current.length &&
             layouts.hasOwnProperty(
-              (key = keyExtractor(dataRef.current[curIndex]))
+              (key = keyExtractor(dataRef.current[curIndex], curIndex))
             ) &&
             layouts[key].pos + layouts[key].extent < clientPos
           ) {
@@ -252,7 +252,7 @@ function DragListImpl<T>(
 
   const renderDragItem = useCallback(
     (info: ListRenderItemInfo<T>) => {
-      const key = keyExtractor(info.item);
+      const key = keyExtractor(info.item, info.index);
       const isActive = key === activeKey.current;
       const onDragStart = () => {
         // We don't allow dragging for lists less than 2 elements

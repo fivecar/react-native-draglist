@@ -9,9 +9,7 @@ import {
   NativeScrollEvent,
   NativeSyntheticEvent,
   PanResponder,
-  Platform,
   StyleProp,
-  UIManager,
   View,
   ViewStyle,
 } from "react-native";
@@ -21,12 +19,6 @@ import {
   PosExtent,
   useDragListContext,
 } from "./DragListContext";
-
-if (Platform.OS === "android") {
-  if (UIManager.setLayoutAnimationEnabledExperimental) {
-    UIManager.setLayoutAnimationEnabledExperimental(true);
-  }
-}
 
 // Each renderItem call is given this when rendering a DragList
 export interface DragListRenderItemInfo<T> extends ListRenderItemInfo<T> {

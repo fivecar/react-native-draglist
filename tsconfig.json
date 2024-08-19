@@ -5,7 +5,6 @@
     "strict": true,
     "module": "ES2015",
     "noEmit": false,
-    "jsx": "react",
     "skipLibCheck": true,
     "types": []
   },

@@ -36,13 +36,13 @@ export interface DragListRenderItemInfo<T> extends ListRenderItemInfo<T> {
    * @deprecated Use onDragStart instead
    * @see onDragStart
    */
-  onStartDrag: () => void;
+  onStartDrag?: () => void;
 
   /**
    * @deprecated Use onDragEnd instead
    * @see onDragEnd
    */
-  onEndDrag: () => void;
+  onEndDrag?: () => void;
 
   /**
    * Whether the item is being dragged at the moment.
@@ -466,12 +466,6 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
       {children}
     </Animated.View>
   );
-}
-
-declare module "react" {
-  function forwardRef<T, P = {}>(
-    render: (props: P, ref: React.Ref<T>) => React.ReactNode | null
-  ): (props: P & React.RefAttributes<T>) => JSX.Element | null;
 }
 
 const DragList = React.forwardRef(DragListImpl);

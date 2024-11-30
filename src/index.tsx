@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Animated,
   Easing,
@@ -194,19 +200,28 @@ function DragListImpl<T>(
             curIndex++;
           }
 
-          // Note that the pan value assumes you're dragging the item by its
-          // center. We could potentially be more awesome by asking
-          // onStartDrag to pass us the relative y position of the drag handle.
-          pan.setValue(
-            clientPos - (layouts[activeKey.current].pos + dragItemExtent / 2)
-          );
+          // https://github.com/fivecar/react-native-draglist/issues/53
+          // Starting RN 0.76.3, pan.setValue(whatever) no longer animates the
+          // isActive item. Dunno whether it's the useNativeDriver or what that
+          // gets this working again. So, lamely, we set the value using a
+          // zero-duration Animated.timing.
+          Animated.timing(pan, {
+            duration: 0,
+            easing: Easing.inOut(Easing.linear),
+            // Note that the pan value assumes you're dragging the item by its
+            // center. We could potentially be more awesome by asking
+            // onStartDrag to pass us the relative y position of the drag handle.
+            toValue:
+              clientPos - (layouts[activeKey.current].pos + dragItemExtent / 2),
+            useNativeDriver: true,
+          }).start();
 
           // This simply exists to trigger a re-render.
           if (panIndex.current != curIndex) {
             setExtra({ ...extra, panIndex: curIndex });
             hoverRef.current?.(curIndex);
+            panIndex.current = curIndex;
           }
-          panIndex.current = curIndex;
         }
       },
       onPanResponderRelease: async (_, _gestate) => {
@@ -391,6 +406,17 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
   const isActive = key === activeKey;
   const ref = useRef<View>(null);
   const anim = useRef(new Animated.Value(0)).current;
+  // https://github.com/fivecar/react-native-draglist/issues/53
+  // Starting RN 0.76.3, we need to use Animated.Value instead of a plain number
+  // for Animated.View's elevation and zIndex. I (fivecar) don't understand why.
+  // If you use raw numbers, the elevation and zIndex don't have an effect.
+  const elevations = useMemo(
+    () =>
+      isActive
+        ? { elevation: new Animated.Value(1), zIndex: new Animated.Value(999) }
+        : { elevation: 0, zIndex: 0 },
+    [isActive]
+  );
 
   useEffect(() => {
     if (activeKey && !isActive && layouts.hasOwnProperty(activeKey)) {
@@ -451,15 +477,13 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
         style,
         isActive
           ? {
-              elevation: 1,
-              zIndex: 999,
+              ...elevations,
               transform: [
                 horizontal ? { translateX: pan } : { translateY: pan },
               ],
             }
           : {
-              elevation: 0,
-              zIndex: 0,
+              ...elevations,
               transform: [
                 horizontal ? { translateX: anim } : { translateY: anim },
               ],

@@ -167,18 +167,15 @@ function DragListImpl<T>(
           // can be a bit finnicky. You need to consider client coordinates and
           // coordinates relative to the screen.
           if (leadingEdge < 0) {
-            offset =
-              scrollPos.current >= dragItemExtent
-                ? -dragItemExtent
-                : -scrollPos.current;
+            offset = -dragItemExtent;
           } else if (trailingEdge > flatWrapLayout.current.extent) {
-            offset = scrollPos.current + dragItemExtent;
+            offset = dragItemExtent;
           }
 
           if (offset !== 0) {
             flatRef.current?.scrollToOffset({
               animated: true,
-              offset: scrollPos.current + offset,
+              offset: Math.max(0, scrollPos.current + offset),
             });
           }
 

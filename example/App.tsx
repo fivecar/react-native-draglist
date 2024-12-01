@@ -1,8 +1,7 @@
-import React, {forwardRef, useImperativeHandle, useRef, useState} from 'react';
+import React, {useState} from 'react';
 import {
   Button,
   FlatList,
-  FlatListProps,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -72,7 +71,6 @@ export default function DraggableLyrics() {
         keyExtractor={keyExtractor}
         onReordered={onReordered}
         renderItem={renderItem}
-        FlatList={ReversedFlatList}
       />
       <Text style={styles.header}>Auto-Scrolling List</Text>
       <DragList
@@ -137,26 +135,3 @@ const styles = StyleSheet.create({
     height: 300,
   },
 });
-
-type ReversedFlatListProps<T> = Omit<FlatListProps<T>, 'data'> & {
-  data: T[];
-};
-
-const ReversedFlatList = forwardRef(
-  <T,>(
-    {data, ...props}: ReversedFlatListProps<T>,
-    ref: React.Ref<FlatList<T>>,
-  ) => {
-    const flatListRef = useRef<FlatList<T>>(null);
-
-    // Expose all FlatList methods via ref
-    useImperativeHandle(ref, () => ({
-      ...flatListRef.current,
-    }));
-
-    // Reverse the data array
-    const reversedData = [...data].reverse();
-
-    return <FlatList {...props} data={reversedData} ref={flatListRef} />;
-  },
-);

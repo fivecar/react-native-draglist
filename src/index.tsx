@@ -543,7 +543,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
 declare module "react" {
   function forwardRef<T, P = {}>(
     render: (props: P, ref: React.Ref<T>) => React.ReactNode | null
-  ): (props: P & React.RefAttributes<T>) => JSX.Element | null;
+  ): (props: P & React.RefAttributes<T>) => React.ReactNode | null;
 }
 
 const DragList = React.forwardRef(DragListImpl);

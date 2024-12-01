@@ -107,6 +107,9 @@ function DragListImpl<T>(
   const dataRef = useRef(data);
   const panGrantedRef = useRef(false);
   const grantScrollPosRef = useRef(0); // Scroll pos when granted
+  // The amount you need to add to the touched position to get to the active
+  // item's center.
+  const grantActiveCenterOffsetRef = useRef(0);
   const autoScrollTimerRef = useRef<ReturnType<typeof setInterval> | null>(
     null
   );
@@ -150,6 +153,19 @@ function DragListImpl<T>(
             };
           }
         );
+
+        if (activeKey.current && layouts.hasOwnProperty(activeKey.current)) {
+          const itemLayout = layouts[activeKey.current];
+          const screenPos = props.horizontal ? gestate.x0 : gestate.y0;
+          const clientViewPos = screenPos - flatWrapLayout.current.pos;
+          const clientPos = clientViewPos + scrollPos.current;
+          const posOnActiveItem = clientPos - itemLayout.pos;
+
+          grantActiveCenterOffsetRef.current =
+            itemLayout.extent / 2 - posOnActiveItem;
+        } else {
+          grantActiveCenterOffsetRef.current = 0;
+        }
 
         onDragBegin?.();
       },
@@ -196,7 +212,8 @@ function DragListImpl<T>(
             layouts.hasOwnProperty(
               (key = keyExtractor(dataRef.current[curIndex], curIndex))
             ) &&
-            layouts[key].pos + layouts[key].extent < clientPos
+            layouts[key].pos + layouts[key].extent <
+              clientPos + grantActiveCenterOffsetRef.current
           ) {
             curIndex++;
           }
@@ -280,6 +297,7 @@ function DragListImpl<T>(
     setExtra({ activeKey: null, panIndex: -1 });
     pan.setValue(0);
     panGrantedRef.current = false;
+    grantActiveCenterOffsetRef.current = 0;
     if (autoScrollTimerRef.current) {
       clearInterval(autoScrollTimerRef.current);
       autoScrollTimerRef.current = null;

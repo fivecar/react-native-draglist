@@ -105,6 +105,9 @@ export default function DraggableLyrics() {
 }
 ```
 
+### More Discussion
+For a great write-up with more details about how to use this library, see [this post](https://xebia.com/blog/drag-drop-sort-implementing-draggable-sorting-in-react-native/) by [Bart den Hollander](https://github.com/hollanderbart).
+
 ## Example Included
 To play with the list, you can run the example within `example/` in order to test the list yourself by first installing all necessary packages:
 

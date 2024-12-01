@@ -8,13 +8,13 @@ import React, {
 import {
   Animated,
   Easing,
+  FlatList,
   FlatListProps,
   LayoutChangeEvent,
   ListRenderItemInfo,
   NativeScrollEvent,
   NativeSyntheticEvent,
   PanResponder,
-  FlatList as RNFlatList,
   StyleProp,
   View,
   ViewStyle,
@@ -74,12 +74,12 @@ interface Props<T> extends Omit<FlatListProps<T>, "renderItem"> {
   onReordered?: (fromIndex: number, toIndex: number) => Promise<void> | void;
   onScroll?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
   onLayout?: (e: LayoutChangeEvent) => void;
-  FlatList?: typeof RNFlatList;
+  CustomFlatList?: typeof FlatList;
 }
 
 function DragListImpl<T>(
   props: Props<T>,
-  ref?: React.ForwardedRef<RNFlatList<T> | null>
+  ref?: React.ForwardedRef<FlatList<T> | null>
 ) {
   const {
     containerStyle,
@@ -90,7 +90,7 @@ function DragListImpl<T>(
     onScroll,
     onLayout,
     renderItem,
-    FlatList = RNFlatList,
+    CustomFlatList = FlatList,
     ...rest
   } = props;
   // activeKey and activeIndex track the item being dragged
@@ -115,7 +115,7 @@ function DragListImpl<T>(
   );
   const hoverRef = useRef(props.onHoverChanged);
   const reorderRef = useRef(props.onReordered);
-  const flatRef = useRef<RNFlatList<T> | null>(null);
+  const flatRef = useRef<FlatList<T> | null>(null);
   const flatWrapRef = useRef<View>(null);
   const flatWrapLayout = useRef<PosExtent>({
     pos: 0,
@@ -396,7 +396,7 @@ function DragListImpl<T>(
         {...panResponder.panHandlers}
         onLayout={onDragLayout}
       >
-        <FlatList
+        <CustomFlatList
           ref={r => {
             flatRef.current = r;
             if (!!ref) {

@@ -79,7 +79,7 @@ interface Props<T> extends Omit<FlatListProps<T>, "renderItem"> {
 
 function DragListImpl<T>(
   props: Props<T>,
-  ref?: React.ForwardedRef<RNFlatList<T>> | null
+  ref?: React.ForwardedRef<RNFlatList<T> | null>
 ) {
   const {
     containerStyle,
@@ -543,7 +543,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
 declare module "react" {
   function forwardRef<T, P = {}>(
     render: (props: P, ref: React.Ref<T>) => React.ReactNode | null
-  ): (props: P & React.RefAttributes<T>) => JSX.Element | null;
+  ): (props: P & React.RefAttributes<T>) => React.ReactNode | null;
 }
 
 const DragList = React.forwardRef(DragListImpl);

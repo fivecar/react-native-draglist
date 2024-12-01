@@ -19,7 +19,7 @@ export default function DraggableLyrics() {
       .flat(),
   );
   const [horzData, setHorzData] = useState(['a', 'b', 'c', 'd', 'e', 'f', 'g']);
-  const listRef = React.useRef<FlatList<string>>(null);
+  const listRef = React.useRef<FlatList<string> | null>(null);
 
   function keyExtractor(str: string) {
     return str;

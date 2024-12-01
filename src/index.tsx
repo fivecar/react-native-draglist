@@ -458,7 +458,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
     () =>
       isActive
         ? { elevation: new Animated.Value(1), zIndex: new Animated.Value(999) }
-        : { elevation: 0, zIndex: 0 },
+        : { elevation: new Animated.Value(0), zIndex: new Animated.Value(0) },
     [isActive]
   );
 

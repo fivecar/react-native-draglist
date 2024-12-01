@@ -105,6 +105,9 @@ function DragListImpl<T>(
   const dataRef = useRef(data);
   const panGrantedRef = useRef(false);
   const grantScrollPosRef = useRef(0); // Scroll pos when granted
+  const autoScrollTimerRef = useRef<ReturnType<typeof setInterval> | null>(
+    null
+  );
   const hoverRef = useRef(props.onHoverChanged);
   const reorderRef = useRef(props.onReordered);
   const flatRef = useRef<FlatList<T> | null>(null);
@@ -149,50 +152,20 @@ function DragListImpl<T>(
         onDragBegin?.();
       },
       onPanResponderMove: (_, gestate) => {
+        if (autoScrollTimerRef.current) {
+          clearInterval(autoScrollTimerRef.current);
+          autoScrollTimerRef.current = null;
+        }
+
+        if (!activeKey.current || !layouts.hasOwnProperty(activeKey.current)) {
+          return;
+        }
+
         const posOrigin = props.horizontal ? gestate.x0 : gestate.y0;
         const pos = props.horizontal ? gestate.dx : gestate.dy;
         const wrapPos = posOrigin + pos - flatWrapLayout.current.pos;
-        const clientPos = wrapPos + scrollPos.current;
 
-        if (activeKey.current && layouts.hasOwnProperty(activeKey.current)) {
-          const dragItemExtent = layouts[activeKey.current].extent;
-          const leadingEdge = wrapPos - dragItemExtent / 2;
-          const trailingEdge = wrapPos + dragItemExtent / 2;
-          let offset = 0;
-
-          // We auto-scroll the FlatList a bit when you drag off the top or
-          // bottom edge (or right/left for horizontal ones). These calculations
-          // can be a bit finnicky. You need to consider client coordinates and
-          // coordinates relative to the screen.
-          if (leadingEdge < 0) {
-            offset = -dragItemExtent;
-          } else if (trailingEdge > flatWrapLayout.current.extent) {
-            offset = dragItemExtent;
-          }
-
-          if (offset !== 0) {
-            flatRef.current?.scrollToOffset({
-              animated: true,
-              offset: Math.max(0, scrollPos.current + offset),
-            });
-          }
-
-          // Now we figure out what your panIndex should be based on everyone's
-          // heights, starting from the first element. Note that we can't do
-          // this math if any element up to your drag point hasn't been measured
-          // yet. I don't think that should ever happen, but take note.
-          let curIndex = 0;
-          let key;
-          while (
-            curIndex < dataRef.current.length &&
-            layouts.hasOwnProperty(
-              (key = keyExtractor(dataRef.current[curIndex], curIndex))
-            ) &&
-            layouts[key].pos + layouts[key].extent < clientPos
-          ) {
-            curIndex++;
-          }
-
+        function updateRendering() {
           const movedAmount = props.horizontal ? gestate.dx : gestate.dy;
           const panAmount =
             scrollPos.current - grantScrollPosRef.current + movedAmount;
@@ -209,6 +182,23 @@ function DragListImpl<T>(
             useNativeDriver: true,
           }).start();
 
+          // Now we figure out what your panIndex should be based on everyone's
+          // heights, starting from the first element. Note that we can't do
+          // this math if any element up to your drag point hasn't been measured
+          // yet. I don't think that should ever happen, but take note.
+          const clientPos = wrapPos + scrollPos.current;
+          let curIndex = 0;
+          let key;
+          while (
+            curIndex < dataRef.current.length &&
+            layouts.hasOwnProperty(
+              (key = keyExtractor(dataRef.current[curIndex], curIndex))
+            ) &&
+            layouts[key].pos + layouts[key].extent < clientPos
+          ) {
+            curIndex++;
+          }
+
           // This simply exists to trigger a re-render.
           if (panIndex.current != curIndex) {
             setExtra({ ...extra, panIndex: curIndex });
@@ -216,8 +206,44 @@ function DragListImpl<T>(
             panIndex.current = curIndex;
           }
         }
+
+        const dragItemExtent = layouts[activeKey.current].extent;
+        const leadingEdge = wrapPos - dragItemExtent / 2;
+        const trailingEdge = wrapPos + dragItemExtent / 2;
+        let offset = 0;
+
+        // We auto-scroll the FlatList a bit when you drag off the top or
+        // bottom edge (or right/left for horizontal ones). These calculations
+        // can be a bit finnicky. You need to consider client coordinates and
+        // coordinates relative to the screen.
+        if (leadingEdge < 0) {
+          offset = -dragItemExtent;
+        } else if (trailingEdge > flatWrapLayout.current.extent) {
+          offset = dragItemExtent;
+        }
+
+        if (offset !== 0) {
+          function scrollOnce(distance: number) {
+            flatRef.current?.scrollToOffset({
+              animated: true,
+              offset: Math.max(0, scrollPos.current + distance),
+            });
+            updateRendering();
+          }
+
+          scrollOnce(offset);
+          autoScrollTimerRef.current = setInterval(() => {
+            scrollOnce(offset);
+          }, AUTO_SCROLL_MILLIS);
+        } else {
+          updateRendering();
+        }
       },
       onPanResponderRelease: async (_, _gestate) => {
+        if (autoScrollTimerRef.current) {
+          clearInterval(autoScrollTimerRef.current);
+          autoScrollTimerRef.current = null;
+        }
         onDragEnd?.();
         if (
           activeIndex.current !== panIndex.current &&
@@ -252,6 +278,10 @@ function DragListImpl<T>(
     setExtra({ activeKey: null, panIndex: -1 });
     pan.setValue(0);
     panGrantedRef.current = false;
+    if (autoScrollTimerRef.current) {
+      clearInterval(autoScrollTimerRef.current);
+      autoScrollTimerRef.current = null;
+    }
   }, []);
 
   useEffect(() => {
@@ -373,7 +403,8 @@ function DragListImpl<T>(
   );
 }
 
-const SLIDE_MILLIS = 300;
+const SLIDE_MILLIS = 200;
+const AUTO_SCROLL_MILLIS = 200;
 
 type CellRendererProps<T> = {
   item: T;

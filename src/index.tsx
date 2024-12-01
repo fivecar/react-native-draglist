@@ -74,11 +74,12 @@ interface Props<T> extends Omit<FlatListProps<T>, "renderItem"> {
   onReordered?: (fromIndex: number, toIndex: number) => Promise<void> | void;
   onScroll?: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
   onLayout?: (e: LayoutChangeEvent) => void;
+  CustomFlatList?: typeof FlatList;
 }
 
 function DragListImpl<T>(
   props: Props<T>,
-  ref?: React.ForwardedRef<FlatList<T>> | null
+  ref?: React.ForwardedRef<FlatList<T> | null>
 ) {
   const {
     containerStyle,
@@ -89,6 +90,7 @@ function DragListImpl<T>(
     onScroll,
     onLayout,
     renderItem,
+    CustomFlatList = FlatList,
     ...rest
   } = props;
   // activeKey and activeIndex track the item being dragged
@@ -394,7 +396,7 @@ function DragListImpl<T>(
         {...panResponder.panHandlers}
         onLayout={onDragLayout}
       >
-        <FlatList
+        <CustomFlatList
           ref={r => {
             flatRef.current = r;
             if (!!ref) {
@@ -541,7 +543,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
 declare module "react" {
   function forwardRef<T, P = {}>(
     render: (props: P, ref: React.Ref<T>) => React.ReactNode | null
-  ): (props: P & React.RefAttributes<T>) => JSX.Element | null;
+  ): (props: P & React.RefAttributes<T>) => React.ReactNode | null;
 }
 
 const DragList = React.forwardRef(DragListImpl);

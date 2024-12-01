@@ -104,6 +104,7 @@ function DragListImpl<T>(
   const layouts = useRef<LayoutCache>({}).current;
   const dataRef = useRef(data);
   const panGrantedRef = useRef(false);
+  const grantScrollPosRef = useRef(0); // Scroll pos when granted
   const hoverRef = useRef(props.onHoverChanged);
   const reorderRef = useRef(props.onReordered);
   const flatRef = useRef<FlatList<T> | null>(null);
@@ -126,11 +127,8 @@ function DragListImpl<T>(
       onMoveShouldSetPanResponderCapture: () =>
         !!activeKey.current && !reorderingRef.current,
       onPanResponderGrant: (_, gestate) => {
-        if (props.horizontal) {
-          pan.setValue(gestate.dx);
-        } else {
-          pan.setValue(gestate.dy);
-        }
+        grantScrollPosRef.current = scrollPos.current;
+        pan.setValue(0);
         panGrantedRef.current = true;
 
         flatWrapRef.current?.measure(
@@ -198,6 +196,10 @@ function DragListImpl<T>(
             curIndex++;
           }
 
+          const movedAmount = props.horizontal ? gestate.dx : gestate.dy;
+          const panAmount =
+            scrollPos.current - grantScrollPosRef.current + movedAmount;
+
           // https://github.com/fivecar/react-native-draglist/issues/53
           // Starting RN 0.76.3, pan.setValue(whatever) no longer animates the
           // isActive item. Dunno whether it's the useNativeDriver or what that
@@ -206,11 +208,7 @@ function DragListImpl<T>(
           Animated.timing(pan, {
             duration: 0,
             easing: Easing.inOut(Easing.linear),
-            // Note that the pan value assumes you're dragging the item by its
-            // center. We could potentially be more awesome by asking
-            // onStartDrag to pass us the relative y position of the drag handle.
-            toValue:
-              clientPos - (layouts[activeKey.current].pos + dragItemExtent / 2),
+            toValue: panAmount,
             useNativeDriver: true,
           }).start();
 

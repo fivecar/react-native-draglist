@@ -126,14 +126,26 @@ function DragListImpl<T>(
   const pan = useRef(new Animated.Value(0)).current;
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponderCapture: () =>
-        !!activeKey.current && !reorderingRef.current,
-      onStartShouldSetPanResponder: () =>
-        !!activeKey.current && !reorderingRef.current,
-      onMoveShouldSetPanResponder: () =>
-        !!activeKey.current && !reorderingRef.current,
-      onMoveShouldSetPanResponderCapture: () =>
-        !!activeKey.current && !reorderingRef.current,
+      onStartShouldSetPanResponderCapture: () => {
+        const res = !!activeKey.current && !reorderingRef.current;
+        console.log("onStartShouldSetPanResponderCapture", res);
+        return res;
+      },
+      onStartShouldSetPanResponder: () => {
+        const res = !!activeKey.current && !reorderingRef.current;
+        console.log("onStartShouldSetPanResponder", res);
+        return res;
+      },
+      onMoveShouldSetPanResponder: () => {
+        const res = !!activeKey.current && !reorderingRef.current;
+        console.log("onMoveShouldSetPanResponder", res);
+        return res;
+      },
+      onMoveShouldSetPanResponderCapture: () => {
+        const res = !!activeKey.current && !reorderingRef.current;
+        console.log("onMoveShouldSetPanResponderCapture", res);
+        return res;
+      },
       onPanResponderGrant: (_, gestate) => {
         grantScrollPosRef.current = scrollPos.current;
         pan.setValue(0);

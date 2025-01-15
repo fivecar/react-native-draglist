@@ -540,12 +540,8 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
   );
 }
 
-declare module "react" {
-  function forwardRef<T, P = {}>(
-    render: (props: P, ref: React.Ref<T>) => React.ReactNode | null
-  ): (props: P & React.RefAttributes<T>) => React.ReactNode | null;
-}
-
-const DragList = React.forwardRef(DragListImpl);
+const DragList = React.forwardRef(DragListImpl) as <T>(
+  props: Props<T> & { ref?: React.ForwardedRef<FlatList<T>> }
+) => React.ReactElement;
 
 export default DragList;

@@ -110,6 +110,7 @@ function DragListImpl<T>(
   // The amount you need to add to the touched position to get to the active
   // item's center.
   const grantActiveCenterOffsetRef = useRef(0);
+  const flatWrapRefPosUpdatedRef = useRef(false);
   const autoScrollTimerRef = useRef<ReturnType<typeof setInterval> | null>(
     null
   );
@@ -138,7 +139,7 @@ function DragListImpl<T>(
         grantScrollPosRef.current = scrollPos.current;
         pan.setValue(0);
         panGrantedRef.current = true;
-
+        flatWrapRefPosUpdatedRef.current = false;
         flatWrapRef.current?.measure(
           (_x, _y, _width, _height, pageX, pageY) => {
             // Capture the latest y position upon starting a drag, because the
@@ -151,21 +152,25 @@ function DragListImpl<T>(
               ...flatWrapLayout.current,
               pos: props.horizontal ? pageX : pageY,
             };
+            if (
+              activeKey.current &&
+              layouts.hasOwnProperty(activeKey.current)
+            ) {
+              const itemLayout = layouts[activeKey.current];
+              const screenPos = props.horizontal ? gestate.x0 : gestate.y0;
+              const clientViewPos = screenPos - flatWrapLayout.current.pos;
+              const clientPos = clientViewPos + scrollPos.current;
+              const posOnActiveItem = clientPos - itemLayout.pos;
+
+              grantActiveCenterOffsetRef.current =
+                itemLayout.extent / 2 - posOnActiveItem;
+            } else {
+              grantActiveCenterOffsetRef.current = 0;
+            }
+
+            flatWrapRefPosUpdatedRef.current = true;
           }
         );
-
-        if (activeKey.current && layouts.hasOwnProperty(activeKey.current)) {
-          const itemLayout = layouts[activeKey.current];
-          const screenPos = props.horizontal ? gestate.x0 : gestate.y0;
-          const clientViewPos = screenPos - flatWrapLayout.current.pos;
-          const clientPos = clientViewPos + scrollPos.current;
-          const posOnActiveItem = clientPos - itemLayout.pos;
-
-          grantActiveCenterOffsetRef.current =
-            itemLayout.extent / 2 - posOnActiveItem;
-        } else {
-          grantActiveCenterOffsetRef.current = 0;
-        }
 
         onDragBegin?.();
       },
@@ -175,7 +180,11 @@ function DragListImpl<T>(
           autoScrollTimerRef.current = null;
         }
 
-        if (!activeKey.current || !layouts.hasOwnProperty(activeKey.current)) {
+        if (
+          !flatWrapRefPosUpdatedRef.current ||
+          !activeKey.current ||
+          !layouts.hasOwnProperty(activeKey.current)
+        ) {
           return;
         }
 

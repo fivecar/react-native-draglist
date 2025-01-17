@@ -1,7 +1,8 @@
-import React, {useState} from 'react';
+import React, {useEffect, useState} from 'react';
 import {
   Button,
   FlatList,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -11,15 +12,32 @@ import DragList, {DragListRenderItemInfo} from 'react-native-draglist';
 
 const SOUND_OF_SILENCE = ['hello', 'darkness', 'my', 'old', 'friend'];
 
+const ListHeader = () => (
+  <View>
+    <Text>Drag my header</Text>
+  </View>
+);
+
+const ListFooter = () => (
+  <View>
+    <Text>Drag my footer</Text>
+  </View>
+);
+
 export default function DraggableLyrics() {
   const [data, setData] = useState(SOUND_OF_SILENCE);
   const [scrollData, setScrollData] = useState(
-    Array(8, 6, 7, 5, 3, 0, 9)
+    [8, 6, 7, 5, 3, 0, 9]
       .map(num => SOUND_OF_SILENCE.map(word => `${word}${num}`))
       .flat(),
   );
   const [horzData, setHorzData] = useState(['a', 'b', 'c', 'd', 'e', 'f', 'g']);
   const listRef = React.useRef<FlatList<string> | null>(null);
+  const scrollRef = React.useRef<ScrollView | null>(null);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({y: 80, animated: true});
+  }, []);
 
   function keyExtractor(str: string) {
     return str;
@@ -64,7 +82,7 @@ export default function DraggableLyrics() {
   }
 
   return (
-    <View style={styles.container}>
+    <ScrollView style={styles.container} ref={scrollRef} scrollEnabled={false}>
       <Text style={styles.header}>Basic List</Text>
       <DragList
         data={data}
@@ -75,20 +93,12 @@ export default function DraggableLyrics() {
       <Text style={styles.header}>Auto-Scrolling List</Text>
       <DragList
         style={styles.scrolledList}
-        ref={listRef} // Verify that using the ref works
+        ref={listRef}
         data={scrollData}
         keyExtractor={keyExtractor}
         onReordered={onScrollReordered}
-        ListHeaderComponent={() => (
-          <View>
-            <Text>Drag my header</Text>
-          </View>
-        )}
-        ListFooterComponent={() => (
-          <View>
-            <Text>Drag my footer</Text>
-          </View>
-        )}
+        ListHeaderComponent={ListHeader}
+        ListFooterComponent={ListFooter}
         renderItem={renderItem}
       />
       <Button
@@ -103,7 +113,18 @@ export default function DraggableLyrics() {
         onReordered={onReorderedHorz}
         renderItem={renderItem}
       />
-    </View>
+      <Text style={[styles.header, {marginTop: 128}]}>
+        Scroll-within-Scroll List
+      </Text>
+      <DragList
+        data={data}
+        keyExtractor={keyExtractor}
+        onReordered={onReordered}
+        ListHeaderComponent={ListHeader}
+        ListFooterComponent={ListFooter}
+        renderItem={renderItem}
+      />
+    </ScrollView>
   );
 }
 

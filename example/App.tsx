@@ -1,4 +1,4 @@
-import React, {useState} from 'react';
+import React, {useMemo, useState} from 'react';
 import {
   Button,
   FlatList,
@@ -14,12 +14,26 @@ const SOUND_OF_SILENCE = ['hello', 'darkness', 'my', 'old', 'friend'];
 export default function DraggableLyrics() {
   const [data, setData] = useState(SOUND_OF_SILENCE);
   const [scrollData, setScrollData] = useState(
-    Array(8, 6, 7, 5, 3, 0, 9)
+    [8, 6, 7, 5, 3, 0, 9]
       .map(num => SOUND_OF_SILENCE.map(word => `${word}${num}`))
       .flat(),
   );
   const [horzData, setHorzData] = useState(['a', 'b', 'c', 'd', 'e', 'f', 'g']);
   const listRef = React.useRef<FlatList<string> | null>(null);
+  const header = useMemo(() => {
+    return (
+      <View>
+        <Text>Drag my header</Text>
+      </View>
+    );
+  }, []);
+  const footer = useMemo(() => {
+    return (
+      <View>
+        <Text>Drag my footer</Text>
+      </View>
+    );
+  }, []);
 
   function keyExtractor(str: string) {
     return str;
@@ -79,16 +93,8 @@ export default function DraggableLyrics() {
         data={scrollData}
         keyExtractor={keyExtractor}
         onReordered={onScrollReordered}
-        ListHeaderComponent={() => (
-          <View>
-            <Text>Drag my header</Text>
-          </View>
-        )}
-        ListFooterComponent={() => (
-          <View>
-            <Text>Drag my footer</Text>
-          </View>
-        )}
+        ListHeaderComponent={header}
+        ListFooterComponent={footer}
         renderItem={renderItem}
       />
       <Button

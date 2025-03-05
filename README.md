@@ -68,7 +68,7 @@ const SOUND_OF_SILENCE = ['hello', 'darkness', 'my', 'old', 'friend'];
 export default function DraggableLyrics() {
   const [data, setData] = useState(SOUND_OF_SILENCE);
 
-  function keyExtractor(str: string, _index: int) {
+  function keyExtractor(str: string, _index: number) {
     return str;
   }
 

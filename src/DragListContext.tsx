@@ -23,6 +23,7 @@ type ContextProps<T> = {
   keyExtractor: (item: T, index: number) => string;
   pan: Animated.Value;
   panIndex: number;
+  panOpacity: Animated.Value;
   layouts: LayoutCache;
   horizontal: boolean | null | undefined;
   children: React.ReactNode;
@@ -40,13 +41,32 @@ export function DragListProvider<T>({
   keyExtractor,
   pan,
   panIndex,
+  panOpacity,
   layouts,
   horizontal,
   children,
 }: ContextProps<T>) {
   const value = useMemo(
-    () => ({ activeKey, activeIndex, keyExtractor, pan, panIndex, layouts, horizontal }),
-    [activeKey, activeIndex, keyExtractor, pan, panIndex, layouts, horizontal],
+    () => ({
+      activeKey,
+      activeIndex,
+      keyExtractor,
+      pan,
+      panIndex,
+      panOpacity,
+      layouts,
+      horizontal,
+    }),
+    [
+      activeKey,
+      activeIndex,
+      keyExtractor,
+      pan,
+      panIndex,
+      panOpacity,
+      layouts,
+      horizontal,
+    ]
   );
 
   return (
@@ -60,7 +80,7 @@ export function useDragListContext<T>() {
   const value = useContext(DragListContext);
   if (!value) {
     throw new Error(
-      "useDragListContext must be called within DragListProvider",
+      "useDragListContext must be called within DragListProvider"
     );
   }
   return value as DragListContextValue<T>;

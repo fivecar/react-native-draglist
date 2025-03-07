@@ -1,6 +1,7 @@
 import React, {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -99,6 +100,7 @@ function DragListImpl<T>(
   const reorderingRef = useRef(false);
   // panIndex tracks the location where the dragged item would go if dropped
   const panIndex = useRef(-1);
+  const panOpacity = useRef(new Animated.Value(1)).current;
   const [extra, setExtra] = useState<ExtraData>({
     activeKey: activeKey.current,
     panIndex: -1,
@@ -293,8 +295,12 @@ function DragListImpl<T>(
           } finally {
             reorderingRef.current = false;
           }
+        } else {
+          // #76 - Only reset here if we're not going to reorder the list. If we are instead
+          // reordering the list, we shouldn't reset until after the useLayoutEffect is done, or
+          // else things will animate/jump around briefly.
+          reset();
         }
-        reset();
       },
     })
   ).current;
@@ -316,6 +322,17 @@ function DragListImpl<T>(
   useEffect(() => {
     dataRef.current = data;
   }, [data]);
+
+  useLayoutEffect(() => {
+    // #76 - Right before we render a reordered list, we hide the item being dragged. If we don't,
+    // an upcoming render will show it jumped back to its old spot briefly before it gets rendered
+    // back into its new spot (because the reset sets the pan position back to 0).
+    panOpacity.setValue(0);
+    reset();
+
+    // Lame, I know. Just need a way to reset opacity after the render is done.
+    setTimeout(() => panOpacity.setValue(1), 0);
+  }, [data, reset]);
 
   // #78 - keep onHoverChanged up to date in our ref
   useEffect(() => {
@@ -394,6 +411,7 @@ function DragListImpl<T>(
     },
     [onLayout]
   );
+
   return (
     <DragListProvider
       activeKey={activeKey.current}
@@ -401,6 +419,7 @@ function DragListImpl<T>(
       keyExtractor={keyExtractor}
       pan={pan}
       panIndex={panIndex.current}
+      panOpacity={panOpacity}
       layouts={layouts}
       horizontal={props.horizontal}
     >
@@ -456,6 +475,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
     activeIndex,
     pan,
     panIndex,
+    panOpacity,
     layouts,
     horizontal,
   } = useDragListContext<T>();
@@ -539,6 +559,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
               transform: [
                 horizontal ? { translateX: pan } : { translateY: pan },
               ],
+              opacity: panOpacity,
             }
           : {
               ...elevations,

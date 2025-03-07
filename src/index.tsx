@@ -317,6 +317,11 @@ function DragListImpl<T>(
     dataRef.current = data;
   }, [data]);
 
+  // #78 - keep onHoverChanged up to date in our ref
+  useEffect(() => {
+    hoverRef.current = props.onHoverChanged;
+  }, [props.onHoverChanged]);
+
   useEffect(() => {
     reorderRef.current = props.onReordered;
   }, [props.onReordered]);

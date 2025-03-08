@@ -102,7 +102,6 @@ function DragListImpl<T>(
   const reorderingRef = useRef(false);
   // panIndex tracks the location where the dragged item would go if dropped
   const panIndex = useRef(-1);
-  const panOpacity = useRef(new Animated.Value(1)).current;
   const [extra, setExtra] = useState<ExtraData>({
     activeKey: activeKey.current,
     panIndex: -1,
@@ -154,6 +153,17 @@ function DragListImpl<T>(
     },
     [pan]
   );
+
+  const keyExtractorRef = useRef(keyExtractor);
+  keyExtractorRef.current = useMemo(() => {
+    return (item: T, index: number) => {
+      const key = keyExtractor(item, index);
+      if (reorderingRef.current) {
+        return key + "_reordering";
+      }
+      return key;
+    };
+  }, [keyExtractor]);
 
   const panResponder = useRef(
     PanResponder.create({
@@ -239,7 +249,10 @@ function DragListImpl<T>(
           while (
             curIndex < dataRef.current.length &&
             layouts.hasOwnProperty(
-              (key = keyExtractor(dataRef.current[curIndex], curIndex))
+              (key = keyExtractorRef.current(
+                dataRef.current[curIndex],
+                curIndex
+              ))
             ) &&
             layouts[key].pos + layouts[key].extent <
               clientPos + grantActiveCenterOffsetRef.current
@@ -309,6 +322,12 @@ function DragListImpl<T>(
             // onReordered call would be made on a list whose indices are
             // stale).
             reorderingRef.current = true;
+
+            const dataCopy = [...dataRef.current];
+            const removed = dataCopy.splice(activeIndex.current, 1);
+            dataCopy.splice(panIndex.current, 0, removed[0]);
+            dataRef.current = dataCopy;
+
             await reorderRef.current?.(activeIndex.current, panIndex.current);
           } finally {
             reorderingRef.current = false;
@@ -366,7 +385,7 @@ function DragListImpl<T>(
 
   const renderDragItem = useCallback(
     (info: ListRenderItemInfo<T>) => {
-      const key = keyExtractor(info.item, info.index);
+      const key = keyExtractorRef.current(info.item, info.index);
       const isActive = key === activeKey.current;
       const onDragStart = () => {
         // We don't allow dragging for lists less than 2 elements
@@ -437,10 +456,10 @@ function DragListImpl<T>(
     <DragListProvider
       activeKey={activeKey.current}
       activeIndex={activeIndex.current}
-      keyExtractor={keyExtractor}
+      keyExtractor={keyExtractorRef.current}
       pan={pan}
       panIndex={panIndex.current}
-      panOpacity={panOpacity}
+      isReordering={reorderingRef.current}
       layouts={layouts}
       horizontal={props.horizontal}
     >
@@ -461,7 +480,7 @@ function DragListImpl<T>(
               }
             }
           }}
-          keyExtractor={keyExtractor}
+          keyExtractor={keyExtractorRef.current}
           data={dataRef.current}
           renderItem={renderDragItem}
           CellRendererComponent={CellRendererComponent}
@@ -482,6 +501,11 @@ const AUTO_SCROLL_MILLIS = 200;
 const ANIM_VALUE_ZERO = new Animated.Value(0);
 const ANIM_VALUE_ONE = new Animated.Value(1);
 const ANIM_VALUE_NINER = new Animated.Value(999);
+const ZERO_ANIMATION_CELL_STYLE: Animated.AnimatedProps<ViewStyle> = {
+  elevation: ANIM_VALUE_ZERO,
+  zIndex: ANIM_VALUE_ZERO,
+  transform: [{ translateX: ANIM_VALUE_ZERO }, { translateY: ANIM_VALUE_ZERO }],
+};
 
 type CellRendererProps<T> = {
   item: T;
@@ -499,7 +523,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
     activeIndex,
     pan,
     panIndex,
-    panOpacity,
+    isReordering,
     layouts,
     horizontal,
   } = useDragListContext<T>();
@@ -518,7 +542,6 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
             elevation: ANIM_VALUE_ONE,
             zIndex: ANIM_VALUE_NINER,
             transform: [horizontal ? { translateX: pan } : { translateY: pan }],
-            opacity: panOpacity,
           }
         : {
             elevation: ANIM_VALUE_ZERO,
@@ -528,7 +551,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
             ],
           },
     ];
-  }, [props.style, isActive, horizontal, pan, panOpacity, anim]);
+  }, [props.style, isActive, horizontal, pan, anim]);
   const onCellLayout = useCallback(
     (evt: LayoutChangeEvent) => {
       if (onLayout) {
@@ -546,6 +569,9 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
   // away, even on this very render (e.g. cases where we set it immediately to zero), whereas an
   // effect would render this without that change first, and then start changing anim.
   const _animCharge = useMemo(() => {
+    if (isReordering) {
+      return;
+    }
     if (activeKey && !isActive && layouts.hasOwnProperty(activeKey)) {
       if (index >= panIndex && index <= activeIndex) {
         return Animated.timing(anim, {
@@ -569,10 +595,14 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
       toValue: 0,
       useNativeDriver: true,
     }).start();
-  }, [activeKey, index, panIndex, key, activeIndex, horizontal]);
+  }, [activeKey, index, panIndex, key, activeIndex, horizontal, isReordering]);
 
   return (
-    <Animated.View key={key} {...rest} style={style} onLayout={onCellLayout}>
+    <Animated.View
+      {...rest}
+      style={isReordering ? [props.style, ZERO_ANIMATION_CELL_STYLE] : style}
+      onLayout={onCellLayout}
+    >
       {children}
     </Animated.View>
   );

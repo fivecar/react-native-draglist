@@ -23,7 +23,7 @@ type ContextProps<T> = {
   keyExtractor: (item: T, index: number) => string;
   pan: Animated.Value;
   panIndex: number;
-  panOpacity: Animated.Value;
+  isReordering: boolean;
   layouts: LayoutCache;
   horizontal: boolean | null | undefined;
   children: React.ReactNode;
@@ -41,7 +41,7 @@ export function DragListProvider<T>({
   keyExtractor,
   pan,
   panIndex,
-  panOpacity,
+  isReordering,
   layouts,
   horizontal,
   children,
@@ -53,7 +53,7 @@ export function DragListProvider<T>({
       keyExtractor,
       pan,
       panIndex,
-      panOpacity,
+      isReordering,
       layouts,
       horizontal,
     }),
@@ -63,7 +63,7 @@ export function DragListProvider<T>({
       keyExtractor,
       pan,
       panIndex,
-      panOpacity,
+      isReordering,
       layouts,
       horizontal,
     ]

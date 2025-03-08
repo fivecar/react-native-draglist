@@ -20,6 +20,7 @@ import {
   ViewStyle,
 } from "react-native";
 import {
+  ActiveData,
   DragListProvider,
   LayoutCache,
   PosExtent,
@@ -94,13 +95,12 @@ function DragListImpl<T>(
     ...rest
   } = props;
   // activeKey and activeIndex track the item being dragged
-  const activeKey = useRef<string | null>(null);
-  const activeIndex = useRef(-1);
-  const reorderingRef = useRef(false);
+  const activeDataRef = useRef<ActiveData | null>(null);
+  const isReorderingRef = useRef(false); // Whether we're actively rendering a reorder right now.
   // panIndex tracks the location where the dragged item would go if dropped
   const panIndex = useRef(-1);
   const [extra, setExtra] = useState<ExtraData>({
-    activeKey: activeKey.current,
+    activeKey: activeDataRef.current?.activeKey ?? null,
     panIndex: -1,
   });
   const layouts = useRef<LayoutCache>({}).current;
@@ -163,23 +163,23 @@ function DragListImpl<T>(
   keyExtractorRef.current = useMemo(() => {
     return (item: T, index: number) => {
       const key = keyExtractor(item, index);
-      if (reorderingRef.current) {
+      if (isReorderingRef.current) {
         return key + "_reordering";
       }
       return key;
     };
   }, [keyExtractor]);
 
+  const shouldCapturePan = useCallback(() => {
+    return !!activeDataRef.current && !isReorderingRef.current;
+  }, []);
+
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponderCapture: () =>
-        !!activeKey.current && !reorderingRef.current,
-      onStartShouldSetPanResponder: () =>
-        !!activeKey.current && !reorderingRef.current,
-      onMoveShouldSetPanResponder: () =>
-        !!activeKey.current && !reorderingRef.current,
-      onMoveShouldSetPanResponderCapture: () =>
-        !!activeKey.current && !reorderingRef.current,
+      onStartShouldSetPanResponderCapture: shouldCapturePan,
+      onStartShouldSetPanResponder: shouldCapturePan,
+      onMoveShouldSetPanResponder: shouldCapturePan,
+      onMoveShouldSetPanResponderCapture: shouldCapturePan,
       onPanResponderGrant: (_, gestate) => {
         grantScrollPosRef.current = scrollPos.current;
         setPan(0);
@@ -198,10 +198,10 @@ function DragListImpl<T>(
               pos: props.horizontal ? pageX : pageY,
             };
             if (
-              activeKey.current &&
-              layouts.hasOwnProperty(activeKey.current)
+              activeDataRef.current &&
+              layouts.hasOwnProperty(activeDataRef.current.activeKey)
             ) {
-              const itemLayout = layouts[activeKey.current];
+              const itemLayout = layouts[activeDataRef.current.activeKey];
               const screenPos = props.horizontal ? gestate.x0 : gestate.y0;
               const clientViewPos = screenPos - flatWrapLayout.current.pos;
               const clientPos = clientViewPos + scrollPos.current;
@@ -227,8 +227,8 @@ function DragListImpl<T>(
 
         if (
           !flatWrapRefPosUpdatedRef.current ||
-          !activeKey.current ||
-          !layouts.hasOwnProperty(activeKey.current)
+          !activeDataRef.current ||
+          !layouts.hasOwnProperty(activeDataRef.current.activeKey)
         ) {
           return;
         }
@@ -273,7 +273,7 @@ function DragListImpl<T>(
           }
         }
 
-        const dragItemExtent = layouts[activeKey.current].extent;
+        const dragItemExtent = layouts[activeDataRef.current.activeKey].extent;
         const leadingEdge = wrapPos - dragItemExtent / 2;
         const trailingEdge = wrapPos + dragItemExtent / 2;
         let offset = 0;
@@ -306,17 +306,20 @@ function DragListImpl<T>(
         }
       },
       onPanResponderRelease: async (_, _gestate) => {
+        const activeIndex = activeDataRef.current?.activeIndex;
+
         if (autoScrollTimerRef.current) {
           clearInterval(autoScrollTimerRef.current);
           autoScrollTimerRef.current = null;
         }
         onDragEnd?.();
         if (
-          activeIndex.current !== panIndex.current &&
+          activeIndex != null && // Being paranoid, we exclude both undefined and null here
+          activeIndex !== panIndex.current &&
           // Ignore the case where you drag the last item beyond the end
           !(
-            activeIndex.current === dataRef.current.length - 1 &&
-            panIndex.current > activeIndex.current
+            activeIndex === dataRef.current.length - 1 &&
+            panIndex.current > activeIndex
           )
         ) {
           try {
@@ -326,7 +329,7 @@ function DragListImpl<T>(
             // quickly (e.g. if onReordered deletes an item, the next
             // onReordered call would be made on a list whose indices are
             // stale).
-            reorderingRef.current = true;
+            isReorderingRef.current = true;
 
             // #76 We need to control what we render so it's always in sync with our animation
             // state. When we call onReordered, the parent can change the data we render without us
@@ -335,14 +338,14 @@ function DragListImpl<T>(
             // render that onReordered triggers, which will then restore our ref back to pointing at
             // the parent's data.
             const dataCopy = [...dataRef.current];
-            const itemToMove = dataCopy.splice(activeIndex.current, 1);
+            const itemToMove = dataCopy.splice(activeIndex, 1);
             dataCopy.splice(panIndex.current, 0, itemToMove[0]);
             dataRef.current = dataCopy;
 
-            await reorderRef.current?.(activeIndex.current, panIndex.current);
+            await reorderRef.current?.(activeIndex, panIndex.current);
           } finally {
             reset(); // Guarantee resetting by putting this in finally
-            reorderingRef.current = false;
+            isReorderingRef.current = false;
           }
         } else {
           reset();
@@ -352,8 +355,7 @@ function DragListImpl<T>(
   ).current;
 
   const reset = useCallback(() => {
-    activeIndex.current = -1;
-    activeKey.current = null;
+    activeDataRef.current = null;
     panIndex.current = -1;
     setExtra({ activeKey: null, panIndex: -1 });
     setPan(0);
@@ -375,13 +377,12 @@ function DragListImpl<T>(
   const renderDragItem = useCallback(
     (info: ListRenderItemInfo<T>) => {
       const key = keyExtractorRef.current(info.item, info.index);
-      const isActive = key === activeKey.current;
+      const isActive = key === activeDataRef.current?.activeKey;
       const onDragStart = () => {
         // We don't allow dragging for lists less than 2 elements
         if (data.length > 1) {
-          activeIndex.current = info.index;
-          activeKey.current = key;
-          panIndex.current = activeIndex.current;
+          activeDataRef.current = { activeIndex: info.index, activeKey: key };
+          panIndex.current = info.index;
           setExtra({ activeKey: key, panIndex: info.index });
         }
       };
@@ -396,7 +397,7 @@ function DragListImpl<T>(
         // decided to call onStartDrag is likely in response to an onPressIn,
         // which then triggers on onPressOut the moment we capture (thus
         // leading to a premature call to onEndDrag here).
-        if (activeKey.current !== null && !panGrantedRef.current) {
+        if (activeDataRef.current && !panGrantedRef.current) {
           reset();
         }
       };
@@ -443,12 +444,11 @@ function DragListImpl<T>(
 
   return (
     <DragListProvider
-      activeKey={activeKey.current}
-      activeIndex={activeIndex.current}
+      activeData={activeDataRef.current}
       keyExtractor={keyExtractorRef.current}
       pan={pan}
       panIndex={panIndex.current}
-      isReordering={reorderingRef.current}
+      isReordering={isReorderingRef.current}
       layouts={layouts}
       horizontal={props.horizontal}
     >
@@ -474,7 +474,7 @@ function DragListImpl<T>(
           renderItem={renderDragItem}
           CellRendererComponent={CellRendererComponent}
           extraData={extra}
-          scrollEnabled={!activeKey.current}
+          scrollEnabled={!activeDataRef.current}
           onScroll={onDragScroll}
           scrollEventThrottle={16} // From react-native-draggable-flatlist; no idea why.
           removeClippedSubviews={false} // https://github.com/facebook/react-native/issues/18616
@@ -503,8 +503,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
   const { item, index, children, onLayout, ...rest } = props;
   const {
     keyExtractor,
-    activeKey,
-    activeIndex,
+    activeData,
     pan,
     panIndex,
     isReordering,
@@ -512,7 +511,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
     horizontal,
   } = useDragListContext<T>();
   const key = keyExtractor(item, index);
-  const isActive = key === activeKey;
+  const isActive = key === activeData?.activeKey;
   const anim = useRef(new Animated.Value(0)).current;
   // https://github.com/fivecar/react-native-draglist/issues/53
   // Starting RN 0.76.3, we need to use Animated.Value instead of a plain number
@@ -559,30 +558,36 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
       // think your rendering code shouldn't have that problem.
       return;
     }
-    if (activeKey && !isActive && layouts.hasOwnProperty(activeKey)) {
-      if (index >= panIndex && index <= activeIndex) {
-        return Animated.timing(anim, {
-          duration: SLIDE_MILLIS,
-          easing: Easing.inOut(Easing.linear),
-          toValue: layouts[activeKey].extent,
-          useNativeDriver: true,
-        }).start();
-      } else if (index >= activeIndex && index <= panIndex) {
-        return Animated.timing(anim, {
-          duration: SLIDE_MILLIS,
-          easing: Easing.inOut(Easing.linear),
-          toValue: -layouts[activeKey].extent,
-          useNativeDriver: true,
-        }).start();
+
+    if (activeData != null) {
+      const activeKey = activeData.activeKey;
+      const activeIndex = activeData.activeIndex;
+
+      if (!isActive && layouts.hasOwnProperty(activeKey)) {
+        if (index >= panIndex && index <= activeIndex) {
+          return Animated.timing(anim, {
+            duration: SLIDE_MILLIS,
+            easing: Easing.inOut(Easing.linear),
+            toValue: layouts[activeKey].extent,
+            useNativeDriver: true,
+          }).start();
+        } else if (index >= activeIndex && index <= panIndex) {
+          return Animated.timing(anim, {
+            duration: SLIDE_MILLIS,
+            easing: Easing.inOut(Easing.linear),
+            toValue: -layouts[activeKey].extent,
+            useNativeDriver: true,
+          }).start();
+        }
       }
     }
     return Animated.timing(anim, {
-      duration: activeKey ? SLIDE_MILLIS : 0,
+      duration: activeData?.activeKey ? SLIDE_MILLIS : 0,
       easing: Easing.inOut(Easing.linear),
       toValue: 0,
       useNativeDriver: true,
     }).start();
-  }, [activeKey, index, panIndex, key, activeIndex, horizontal, isReordering]);
+  }, [index, panIndex, key, activeData, horizontal, isReordering]);
 
   return (
     <Animated.View {...rest} style={style} onLayout={onCellLayout}>

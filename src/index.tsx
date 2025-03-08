@@ -10,11 +10,13 @@ import {
   Easing,
   FlatList,
   FlatListProps,
+  GestureResponderEvent,
   LayoutChangeEvent,
   ListRenderItemInfo,
   NativeScrollEvent,
   NativeSyntheticEvent,
   PanResponder,
+  PanResponderGestureState,
   StyleProp,
   View,
   ViewStyle,
@@ -174,188 +176,200 @@ function DragListImpl<T>(
     return !!activeDataRef.current && !isReorderingRef.current;
   }, []);
 
+  const onPanResponderGrant = useCallback(
+    (_: GestureResponderEvent, gestate: PanResponderGestureState) => {
+      grantScrollPosRef.current = scrollPos.current;
+      setPan(0);
+      panGrantedRef.current = true;
+      flatWrapRefPosUpdatedRef.current = false;
+      flatWrapRef.current?.measure((_x, _y, _width, _height, pageX, pageY) => {
+        // Capture the latest y position upon starting a drag, because the
+        // window could have moved since we last measured. Remember that moves
+        // without resizes _don't_ generate onLayout, so we need to actively
+        // measure here. React doesn't give a way to subscribe to move events.
+        // We don't overwrite width/height from this measurement because
+        // height can come back 0.
+        flatWrapLayout.current = {
+          ...flatWrapLayout.current,
+          pos: props.horizontal ? pageX : pageY,
+        };
+        if (
+          activeDataRef.current &&
+          layouts.hasOwnProperty(activeDataRef.current.key)
+        ) {
+          const itemLayout = layouts[activeDataRef.current.key];
+          const screenPos = props.horizontal ? gestate.x0 : gestate.y0;
+          const clientViewPos = screenPos - flatWrapLayout.current.pos;
+          const clientPos = clientViewPos + scrollPos.current;
+          const posOnActiveItem = clientPos - itemLayout.pos;
+
+          grantActiveCenterOffsetRef.current =
+            itemLayout.extent / 2 - posOnActiveItem;
+        } else {
+          grantActiveCenterOffsetRef.current = 0;
+        }
+
+        flatWrapRefPosUpdatedRef.current = true;
+      });
+
+      onDragBegin?.();
+    },
+    []
+  );
+
+  const onPanResponderMove = useCallback(
+    (_: GestureResponderEvent, gestate: PanResponderGestureState) => {
+      clearAutoScrollTimer();
+
+      if (
+        !flatWrapRefPosUpdatedRef.current ||
+        !activeDataRef.current ||
+        !layouts.hasOwnProperty(activeDataRef.current.key)
+      ) {
+        return;
+      }
+
+      const posOrigin = props.horizontal ? gestate.x0 : gestate.y0;
+      const pos = props.horizontal ? gestate.dx : gestate.dy;
+      const wrapPos = posOrigin + pos - flatWrapLayout.current.pos;
+
+      function updateRendering() {
+        const movedAmount = props.horizontal ? gestate.dx : gestate.dy;
+        const panAmount =
+          scrollPos.current - grantScrollPosRef.current + movedAmount;
+
+        setPan(panAmount);
+
+        // Now we figure out what your panIndex should be based on everyone's
+        // heights, starting from the first element. Note that we can't do
+        // this math if any element up to your drag point hasn't been measured
+        // yet. I don't think that should ever happen, but take note.
+        const clientPos = wrapPos + scrollPos.current;
+        let curIndex = 0;
+        let key;
+        while (
+          curIndex < dataRef.current.length &&
+          layouts.hasOwnProperty(
+            (key = keyExtractorRef.current(dataRef.current[curIndex], curIndex))
+          ) &&
+          layouts[key].pos + layouts[key].extent <
+            clientPos + grantActiveCenterOffsetRef.current
+        ) {
+          curIndex++;
+        }
+
+        // This simply exists to trigger a re-render.
+        if (panIndex.current != curIndex) {
+          setExtra({ ...extra, panIndex: curIndex });
+          hoverRef.current?.(curIndex);
+          panIndex.current = curIndex;
+        }
+      }
+
+      const dragItemExtent = layouts[activeDataRef.current.key].extent;
+      const leadingEdge = wrapPos - dragItemExtent / 2;
+      const trailingEdge = wrapPos + dragItemExtent / 2;
+      let offset = 0;
+
+      // We auto-scroll the FlatList a bit when you drag off the top or
+      // bottom edge (or right/left for horizontal ones). These calculations
+      // can be a bit finnicky. You need to consider client coordinates and
+      // coordinates relative to the screen.
+      if (leadingEdge < 0) {
+        offset = -dragItemExtent;
+      } else if (trailingEdge > flatWrapLayout.current.extent) {
+        offset = dragItemExtent;
+      }
+
+      if (offset !== 0) {
+        function scrollOnce(distance: number) {
+          flatRef.current?.scrollToOffset({
+            animated: true,
+            offset: Math.max(0, scrollPos.current + distance),
+          });
+          updateRendering();
+        }
+
+        scrollOnce(offset);
+        autoScrollTimerRef.current = setInterval(() => {
+          scrollOnce(offset);
+        }, AUTO_SCROLL_MILLIS);
+      } else {
+        updateRendering();
+      }
+    },
+    []
+  );
+
+  const onPanResponderRelease = useCallback(
+    async (_: GestureResponderEvent, _gestate: PanResponderGestureState) => {
+      const activeIndex = activeDataRef.current?.index;
+
+      clearAutoScrollTimer();
+      onDragEnd?.();
+
+      if (
+        activeIndex != null && // Being paranoid, we exclude both undefined and null here
+        activeIndex !== panIndex.current &&
+        // Ignore the case where you drag the last item beyond the end
+        !(
+          activeIndex === dataRef.current.length - 1 &&
+          panIndex.current > activeIndex
+        )
+      ) {
+        try {
+          // We serialize reordering so that we don't capture any new pan
+          // attempts during this time. Otherwise, onReordered could be called
+          // with indices that would be stale if you panned several times
+          // quickly (e.g. if onReordered deletes an item, the next
+          // onReordered call would be made on a list whose indices are
+          // stale).
+          isReorderingRef.current = true;
+
+          // #76 We need to control what we render so it's always in sync with our animation
+          // state. When we call onReordered, the parent can change the data we render without us
+          // being able to sync that change with our own state, so we insulate ourselves during
+          // this render by keeping our own copy of data. Our `useEffect` will run after the
+          // render that onReordered triggers, which will then restore our ref back to pointing at
+          // the parent's data.
+          const dataCopy = [...dataRef.current];
+          const itemToMove = dataCopy.splice(activeIndex, 1);
+          dataCopy.splice(panIndex.current, 0, itemToMove[0]);
+          dataRef.current = dataCopy;
+
+          await reorderRef.current?.(activeIndex, panIndex.current);
+        } finally {
+          reset(); // Guarantee resetting by putting this in finally
+          isReorderingRef.current = false;
+        }
+      } else {
+        // #76 - Only reset here if we're not going to reorder the list. If we are instead
+        // reordering the list, we shouldn't reset until after the useLayoutEffect is done, or
+        // else things will animate/jump around briefly.
+        reset();
+      }
+    },
+    []
+  );
+
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponderCapture: shouldCapturePan,
       onStartShouldSetPanResponder: shouldCapturePan,
       onMoveShouldSetPanResponder: shouldCapturePan,
       onMoveShouldSetPanResponderCapture: shouldCapturePan,
-      onPanResponderGrant: (_, gestate) => {
-        grantScrollPosRef.current = scrollPos.current;
-        setPan(0);
-        panGrantedRef.current = true;
-        flatWrapRefPosUpdatedRef.current = false;
-        flatWrapRef.current?.measure(
-          (_x, _y, _width, _height, pageX, pageY) => {
-            // Capture the latest y position upon starting a drag, because the
-            // window could have moved since we last measured. Remember that moves
-            // without resizes _don't_ generate onLayout, so we need to actively
-            // measure here. React doesn't give a way to subscribe to move events.
-            // We don't overwrite width/height from this measurement because
-            // height can come back 0.
-            flatWrapLayout.current = {
-              ...flatWrapLayout.current,
-              pos: props.horizontal ? pageX : pageY,
-            };
-            if (
-              activeDataRef.current &&
-              layouts.hasOwnProperty(activeDataRef.current.key)
-            ) {
-              const itemLayout = layouts[activeDataRef.current.key];
-              const screenPos = props.horizontal ? gestate.x0 : gestate.y0;
-              const clientViewPos = screenPos - flatWrapLayout.current.pos;
-              const clientPos = clientViewPos + scrollPos.current;
-              const posOnActiveItem = clientPos - itemLayout.pos;
-
-              grantActiveCenterOffsetRef.current =
-                itemLayout.extent / 2 - posOnActiveItem;
-            } else {
-              grantActiveCenterOffsetRef.current = 0;
-            }
-
-            flatWrapRefPosUpdatedRef.current = true;
-          }
-        );
-
-        onDragBegin?.();
-      },
-      onPanResponderMove: (_, gestate) => {
-        if (autoScrollTimerRef.current) {
-          clearInterval(autoScrollTimerRef.current);
-          autoScrollTimerRef.current = null;
-        }
-
-        if (
-          !flatWrapRefPosUpdatedRef.current ||
-          !activeDataRef.current ||
-          !layouts.hasOwnProperty(activeDataRef.current.key)
-        ) {
-          return;
-        }
-
-        const posOrigin = props.horizontal ? gestate.x0 : gestate.y0;
-        const pos = props.horizontal ? gestate.dx : gestate.dy;
-        const wrapPos = posOrigin + pos - flatWrapLayout.current.pos;
-
-        function updateRendering() {
-          const movedAmount = props.horizontal ? gestate.dx : gestate.dy;
-          const panAmount =
-            scrollPos.current - grantScrollPosRef.current + movedAmount;
-
-          setPan(panAmount);
-
-          // Now we figure out what your panIndex should be based on everyone's
-          // heights, starting from the first element. Note that we can't do
-          // this math if any element up to your drag point hasn't been measured
-          // yet. I don't think that should ever happen, but take note.
-          const clientPos = wrapPos + scrollPos.current;
-          let curIndex = 0;
-          let key;
-          while (
-            curIndex < dataRef.current.length &&
-            layouts.hasOwnProperty(
-              (key = keyExtractorRef.current(
-                dataRef.current[curIndex],
-                curIndex
-              ))
-            ) &&
-            layouts[key].pos + layouts[key].extent <
-              clientPos + grantActiveCenterOffsetRef.current
-          ) {
-            curIndex++;
-          }
-
-          // This simply exists to trigger a re-render.
-          if (panIndex.current != curIndex) {
-            setExtra({ ...extra, panIndex: curIndex });
-            hoverRef.current?.(curIndex);
-            panIndex.current = curIndex;
-          }
-        }
-
-        const dragItemExtent = layouts[activeDataRef.current.key].extent;
-        const leadingEdge = wrapPos - dragItemExtent / 2;
-        const trailingEdge = wrapPos + dragItemExtent / 2;
-        let offset = 0;
-
-        // We auto-scroll the FlatList a bit when you drag off the top or
-        // bottom edge (or right/left for horizontal ones). These calculations
-        // can be a bit finnicky. You need to consider client coordinates and
-        // coordinates relative to the screen.
-        if (leadingEdge < 0) {
-          offset = -dragItemExtent;
-        } else if (trailingEdge > flatWrapLayout.current.extent) {
-          offset = dragItemExtent;
-        }
-
-        if (offset !== 0) {
-          function scrollOnce(distance: number) {
-            flatRef.current?.scrollToOffset({
-              animated: true,
-              offset: Math.max(0, scrollPos.current + distance),
-            });
-            updateRendering();
-          }
-
-          scrollOnce(offset);
-          autoScrollTimerRef.current = setInterval(() => {
-            scrollOnce(offset);
-          }, AUTO_SCROLL_MILLIS);
-        } else {
-          updateRendering();
-        }
-      },
-      onPanResponderRelease: async (_, _gestate) => {
-        const activeIndex = activeDataRef.current?.index;
-
-        if (autoScrollTimerRef.current) {
-          clearInterval(autoScrollTimerRef.current);
-          autoScrollTimerRef.current = null;
-        }
-        onDragEnd?.();
-        if (
-          activeIndex != null && // Being paranoid, we exclude both undefined and null here
-          activeIndex !== panIndex.current &&
-          // Ignore the case where you drag the last item beyond the end
-          !(
-            activeIndex === dataRef.current.length - 1 &&
-            panIndex.current > activeIndex
-          )
-        ) {
-          try {
-            // We serialize reordering so that we don't capture any new pan
-            // attempts during this time. Otherwise, onReordered could be called
-            // with indices that would be stale if you panned several times
-            // quickly (e.g. if onReordered deletes an item, the next
-            // onReordered call would be made on a list whose indices are
-            // stale).
-            isReorderingRef.current = true;
-
-            // #76 We need to control what we render so it's always in sync with our animation
-            // state. When we call onReordered, the parent can change the data we render without us
-            // being able to sync that change with our own state, so we insulate ourselves during
-            // this render by keeping our own copy of data. Our `useEffect` will run after the
-            // render that onReordered triggers, which will then restore our ref back to pointing at
-            // the parent's data.
-            const dataCopy = [...dataRef.current];
-            const itemToMove = dataCopy.splice(activeIndex, 1);
-            dataCopy.splice(panIndex.current, 0, itemToMove[0]);
-            dataRef.current = dataCopy;
-
-            await reorderRef.current?.(activeIndex, panIndex.current);
-          } finally {
-            reset(); // Guarantee resetting by putting this in finally
-            isReorderingRef.current = false;
-          }
-        } else {
-          // #76 - Only reset here if we're not going to reorder the list. If we are instead
-          // reordering the list, we shouldn't reset until after the useLayoutEffect is done, or
-          // else things will animate/jump around briefly.
-          reset();
-        }
-      },
+      onPanResponderGrant,
+      onPanResponderMove,
+      onPanResponderRelease,
     })
   ).current;
+
+  const clearAutoScrollTimer = useCallback(() => {
+    if (autoScrollTimerRef.current) {
+      clearInterval(autoScrollTimerRef.current);
+      autoScrollTimerRef.current = null;
+    }
+  }, []);
 
   const reset = useCallback(() => {
     activeDataRef.current = null;
@@ -364,10 +378,7 @@ function DragListImpl<T>(
     setPan(0);
     panGrantedRef.current = false;
     grantActiveCenterOffsetRef.current = 0;
-    if (autoScrollTimerRef.current) {
-      clearInterval(autoScrollTimerRef.current);
-      autoScrollTimerRef.current = null;
-    }
+    clearAutoScrollTimer();
   }, []);
 
   useEffect(() => {

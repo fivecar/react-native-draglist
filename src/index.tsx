@@ -16,6 +16,7 @@ import {
   NativeScrollEvent,
   NativeSyntheticEvent,
   PanResponder,
+  Platform,
   StyleProp,
   View,
   ViewStyle,
@@ -56,6 +57,8 @@ export interface DragListRenderItemInfo<T> extends ListRenderItemInfo<T> {
    */
   isActive: boolean;
 }
+
+const isAndroid = Platform.OS === "android";
 
 // Used merely to trigger FlatList to re-render when necessary. Changing the
 // activeKey or the panIndex should both trigger re-render.
@@ -327,11 +330,15 @@ function DragListImpl<T>(
     // #76 - Right before we render a reordered list, we hide the item being dragged. If we don't,
     // an upcoming render will show it jumped back to its old spot briefly before it gets rendered
     // back into its new spot (because the reset sets the pan position back to 0).
-    panOpacity.setValue(0);
+    if (!isAndroid) {
+      panOpacity.setValue(0);
+    }
     reset();
 
-    // Lame, I know. Just need a way to reset opacity after the render is done.
-    setTimeout(() => panOpacity.setValue(1), 0);
+    if (!isAndroid) {
+      // Lame, I know. Just need a way to reset opacity after the render is done.
+      setTimeout(() => panOpacity.setValue(1), 0);
+    }
   }, [data, reset]);
 
   // #78 - keep onHoverChanged up to date in our ref

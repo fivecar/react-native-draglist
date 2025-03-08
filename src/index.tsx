@@ -100,7 +100,7 @@ function DragListImpl<T>(
   // panIndex tracks the location where the dragged item would go if dropped
   const panIndex = useRef(-1);
   const [extra, setExtra] = useState<ExtraData>({
-    activeKey: activeDataRef.current?.activeKey ?? null,
+    activeKey: activeDataRef.current?.key ?? null,
     panIndex: -1,
   });
   const layouts = useRef<LayoutCache>({}).current;
@@ -199,9 +199,9 @@ function DragListImpl<T>(
             };
             if (
               activeDataRef.current &&
-              layouts.hasOwnProperty(activeDataRef.current.activeKey)
+              layouts.hasOwnProperty(activeDataRef.current.key)
             ) {
-              const itemLayout = layouts[activeDataRef.current.activeKey];
+              const itemLayout = layouts[activeDataRef.current.key];
               const screenPos = props.horizontal ? gestate.x0 : gestate.y0;
               const clientViewPos = screenPos - flatWrapLayout.current.pos;
               const clientPos = clientViewPos + scrollPos.current;
@@ -228,7 +228,7 @@ function DragListImpl<T>(
         if (
           !flatWrapRefPosUpdatedRef.current ||
           !activeDataRef.current ||
-          !layouts.hasOwnProperty(activeDataRef.current.activeKey)
+          !layouts.hasOwnProperty(activeDataRef.current.key)
         ) {
           return;
         }
@@ -273,7 +273,7 @@ function DragListImpl<T>(
           }
         }
 
-        const dragItemExtent = layouts[activeDataRef.current.activeKey].extent;
+        const dragItemExtent = layouts[activeDataRef.current.key].extent;
         const leadingEdge = wrapPos - dragItemExtent / 2;
         const trailingEdge = wrapPos + dragItemExtent / 2;
         let offset = 0;
@@ -306,7 +306,7 @@ function DragListImpl<T>(
         }
       },
       onPanResponderRelease: async (_, _gestate) => {
-        const activeIndex = activeDataRef.current?.activeIndex;
+        const activeIndex = activeDataRef.current?.index;
 
         if (autoScrollTimerRef.current) {
           clearInterval(autoScrollTimerRef.current);
@@ -377,11 +377,11 @@ function DragListImpl<T>(
   const renderDragItem = useCallback(
     (info: ListRenderItemInfo<T>) => {
       const key = keyExtractorRef.current(info.item, info.index);
-      const isActive = key === activeDataRef.current?.activeKey;
+      const isActive = key === activeDataRef.current?.key;
       const onDragStart = () => {
         // We don't allow dragging for lists less than 2 elements
         if (data.length > 1) {
-          activeDataRef.current = { activeIndex: info.index, activeKey: key };
+          activeDataRef.current = { index: info.index, key: key };
           panIndex.current = info.index;
           setExtra({ activeKey: key, panIndex: info.index });
         }
@@ -511,7 +511,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
     horizontal,
   } = useDragListContext<T>();
   const key = keyExtractor(item, index);
-  const isActive = key === activeData?.activeKey;
+  const isActive = key === activeData?.key;
   const anim = useRef(new Animated.Value(0)).current;
   // https://github.com/fivecar/react-native-draglist/issues/53
   // Starting RN 0.76.3, we need to use Animated.Value instead of a plain number
@@ -560,8 +560,8 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
     }
 
     if (activeData != null) {
-      const activeKey = activeData.activeKey;
-      const activeIndex = activeData.activeIndex;
+      const activeKey = activeData.key;
+      const activeIndex = activeData.index;
 
       if (!isActive && layouts.hasOwnProperty(activeKey)) {
         if (index >= panIndex && index <= activeIndex) {
@@ -582,7 +582,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
       }
     }
     return Animated.timing(anim, {
-      duration: activeData?.activeKey ? SLIDE_MILLIS : 0,
+      duration: activeData?.key ? SLIDE_MILLIS : 0,
       easing: Easing.inOut(Easing.linear),
       toValue: 0,
       useNativeDriver: true,

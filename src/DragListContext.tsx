@@ -16,8 +16,8 @@ export interface LayoutCache {
 }
 
 export interface ActiveData {
-  activeKey: string;
-  activeIndex: number;
+  key: string;
+  index: number;
 }
 
 // This all basically enables us to pass data into a CellRendererComponent,

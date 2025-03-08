@@ -15,15 +15,19 @@ export interface LayoutCache {
   [key: string]: PosExtent;
 }
 
+export interface ActiveData {
+  key: string;
+  index: number;
+}
+
 // This all basically enables us to pass data into a CellRendererComponent,
 // which we otherwise don't control the props to.
 type ContextProps<T> = {
-  activeKey: string | null;
-  activeIndex: number;
+  activeData: ActiveData | null;
   keyExtractor: (item: T, index: number) => string;
   pan: Animated.Value;
   panIndex: number;
-  panOpacity: Animated.Value;
+  isReordering: boolean;
   layouts: LayoutCache;
   horizontal: boolean | null | undefined;
   children: React.ReactNode;
@@ -36,37 +40,26 @@ const DragListContext = React.createContext<
 >(undefined);
 
 export function DragListProvider<T>({
-  activeKey,
-  activeIndex,
+  activeData,
   keyExtractor,
   pan,
   panIndex,
-  panOpacity,
+  isReordering,
   layouts,
   horizontal,
   children,
 }: ContextProps<T>) {
   const value = useMemo(
     () => ({
-      activeKey,
-      activeIndex,
+      activeData,
       keyExtractor,
       pan,
       panIndex,
-      panOpacity,
+      isReordering,
       layouts,
       horizontal,
     }),
-    [
-      activeKey,
-      activeIndex,
-      keyExtractor,
-      pan,
-      panIndex,
-      panOpacity,
-      layouts,
-      horizontal,
-    ]
+    [activeData, keyExtractor, pan, panIndex, isReordering, layouts, horizontal]
   );
 
   return (

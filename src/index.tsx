@@ -1,7 +1,6 @@
 import React, {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -109,27 +108,53 @@ function DragListImpl<T>(
     panIndex: -1,
   });
   const layouts = useRef<LayoutCache>({}).current;
-  const dataRef = useRef(data);
   const panGrantedRef = useRef(false);
   const grantScrollPosRef = useRef(0); // Scroll pos when granted
   // The amount you need to add to the touched position to get to the active
   // item's center.
   const grantActiveCenterOffsetRef = useRef(0);
-  const flatWrapRefPosUpdatedRef = useRef(false);
   const autoScrollTimerRef = useRef<ReturnType<typeof setInterval> | null>(
     null
   );
+
+  // The following refs exist only to avoid unnecessary re-renders, so we keep them up to date
+  // immediately using `useMemo` as opposed to `useEffect`, which allows them technically to be
+  // wrong/off for one render (since effects run after a render is done).
+  const dataRef = useRef(data);
   const hoverRef = useRef(props.onHoverChanged);
+  // #78 - keep onHoverChanged up to date in our ref
+  hoverRef.current = useMemo(
+    () => props.onHoverChanged,
+    [props.onHoverChanged]
+  );
   const reorderRef = useRef(props.onReordered);
+  reorderRef.current = useMemo(() => props.onReordered, [props.onReordered]);
+
   const flatRef = useRef<FlatList<T> | null>(null);
   const flatWrapRef = useRef<View>(null);
   const flatWrapLayout = useRef<PosExtent>({
     pos: 0,
     extent: 1,
   });
+  const flatWrapRefPosUpdatedRef = useRef(false);
   const scrollPos = useRef(0);
+
   // pan is the drag dy
   const pan = useRef(new Animated.Value(0)).current;
+  const setPan = useCallback(
+    (value: number) => {
+      // Starting RN 0.76.3, pan.setValue(whatever) no longer animates the isActive item. Dunno whether
+      // it's the useNativeDriver or what that gets this working again. So, lamely, we set the value
+      // using a zero-duration Animated.timing.
+      Animated.timing(pan, {
+        duration: 0,
+        toValue: value,
+        useNativeDriver: true,
+      }).start();
+    },
+    [pan]
+  );
+
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponderCapture: () =>
@@ -142,7 +167,7 @@ function DragListImpl<T>(
         !!activeKey.current && !reorderingRef.current,
       onPanResponderGrant: (_, gestate) => {
         grantScrollPosRef.current = scrollPos.current;
-        pan.setValue(0);
+        setPan(0);
         panGrantedRef.current = true;
         flatWrapRefPosUpdatedRef.current = false;
         flatWrapRef.current?.measure(
@@ -202,17 +227,7 @@ function DragListImpl<T>(
           const panAmount =
             scrollPos.current - grantScrollPosRef.current + movedAmount;
 
-          // https://github.com/fivecar/react-native-draglist/issues/53
-          // Starting RN 0.76.3, pan.setValue(whatever) no longer animates the
-          // isActive item. Dunno whether it's the useNativeDriver or what that
-          // gets this working again. So, lamely, we set the value using a
-          // zero-duration Animated.timing.
-          Animated.timing(pan, {
-            duration: 0,
-            easing: Easing.inOut(Easing.linear),
-            toValue: panAmount,
-            useNativeDriver: true,
-          }).start();
+          setPan(panAmount);
 
           // Now we figure out what your panIndex should be based on everyone's
           // heights, starting from the first element. Note that we can't do
@@ -313,7 +328,7 @@ function DragListImpl<T>(
     activeKey.current = null;
     panIndex.current = -1;
     setExtra({ activeKey: null, panIndex: -1 });
-    pan.setValue(0);
+    setPan(0);
     panGrantedRef.current = false;
     grantActiveCenterOffsetRef.current = 0;
     if (autoScrollTimerRef.current) {
@@ -323,34 +338,31 @@ function DragListImpl<T>(
   }, []);
 
   useEffect(() => {
+    if (activeKey.current) {
+      // Reset causes a re-render, so only do so if we are currently dragging around. Note the reset
+      // should happen before updating dataRef because the latter is referenced by the pan
+      // responders, and if you're in this case here, you're presumably mid-pan.
+      reset();
+    }
     dataRef.current = data;
-  }, [data]);
-
-  useLayoutEffect(() => {
-    // #76 - Right before we render a reordered list, we hide the item being dragged. If we don't,
-    // an upcoming render will show it jumped back to its old spot briefly before it gets rendered
-    // back into its new spot (because the reset sets the pan position back to 0).
-    // #81 - Have to not do this on Android, because those items disappear forever. It's like
-    // Android recycles views and ignores the subsequent opacity reset, seemingly.
-    if (!isAndroid) {
-      panOpacity.setValue(0);
-    }
-    reset();
-
-    if (!isAndroid) {
-      // Lame, I know. Just need a way to reset opacity after the render is done.
-      setTimeout(() => panOpacity.setValue(1), 0);
-    }
   }, [data, reset]);
 
-  // #78 - keep onHoverChanged up to date in our ref
-  useEffect(() => {
-    hoverRef.current = props.onHoverChanged;
-  }, [props.onHoverChanged]);
+  // useLayoutEffect(() => {
+  //   // #76 - Right before we render a reordered list, we hide the item being dragged. If we don't,
+  //   // an upcoming render will show it jumped back to its old spot briefly before it gets rendered
+  //   // back into its new spot (because the reset sets the pan position back to 0).
+  //   // #81 - Have to not do this on Android, because those items disappear forever. It's like
+  //   // Android recycles views and ignores the subsequent opacity reset, seemingly.
+  //   if (!isAndroid) {
+  //     panOpacity.setValue(0);
+  //   }
+  //   reset();
 
-  useEffect(() => {
-    reorderRef.current = props.onReordered;
-  }, [props.onReordered]);
+  //   if (!isAndroid) {
+  //     // Lame, I know. Just need a way to reset opacity after the render is done.
+  //     setTimeout(() => panOpacity.setValue(1), 0);
+  //   }
+  // }, [data, reset]);
 
   const renderDragItem = useCallback(
     (info: ListRenderItemInfo<T>) => {
@@ -450,7 +462,7 @@ function DragListImpl<T>(
             }
           }}
           keyExtractor={keyExtractor}
-          data={data}
+          data={dataRef.current}
           renderItem={renderDragItem}
           CellRendererComponent={CellRendererComponent}
           extraData={extra}

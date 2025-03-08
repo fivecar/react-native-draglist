@@ -330,6 +330,8 @@ function DragListImpl<T>(
     // #76 - Right before we render a reordered list, we hide the item being dragged. If we don't,
     // an upcoming render will show it jumped back to its old spot briefly before it gets rendered
     // back into its new spot (because the reset sets the pan position back to 0).
+    // #81 - Have to not do this on Android, because those items disappear forever. It's like
+    // Android recycles views and ignores the subsequent opacity reset, seemingly.
     if (!isAndroid) {
       panOpacity.setValue(0);
     }

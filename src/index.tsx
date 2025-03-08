@@ -467,6 +467,9 @@ function DragListImpl<T>(
 
 const SLIDE_MILLIS = 200;
 const AUTO_SCROLL_MILLIS = 200;
+const ANIM_VALUE_ZERO = new Animated.Value(0);
+const ANIM_VALUE_ONE = new Animated.Value(1);
+const ANIM_VALUE_NINER = new Animated.Value(999);
 
 type CellRendererProps<T> = {
   item: T;
@@ -477,7 +480,7 @@ type CellRendererProps<T> = {
 };
 
 function CellRendererComponent<T>(props: CellRendererProps<T>) {
-  const { item, index, children, style, onLayout, ...rest } = props;
+  const { item, index, children, onLayout, ...rest } = props;
   const {
     keyExtractor,
     activeKey,
@@ -488,97 +491,76 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
     layouts,
     horizontal,
   } = useDragListContext<T>();
-  const [isOffset, setIsOffset] = useState(false); // Whether anim != 0
   const key = keyExtractor(item, index);
   const isActive = key === activeKey;
-  const ref = useRef<View>(null);
   const anim = useRef(new Animated.Value(0)).current;
   // https://github.com/fivecar/react-native-draglist/issues/53
   // Starting RN 0.76.3, we need to use Animated.Value instead of a plain number
   // for Animated.View's elevation and zIndex. I (fivecar) don't understand why.
   // If you use raw numbers, the elevation and zIndex don't have an effect.
-  const elevations = useMemo(
-    () =>
+  const style = useMemo(() => {
+    return [
+      props.style,
       isActive
-        ? { elevation: new Animated.Value(1), zIndex: new Animated.Value(999) }
-        : { elevation: new Animated.Value(0), zIndex: new Animated.Value(0) },
-    [isActive]
-  );
+        ? {
+            elevation: ANIM_VALUE_ONE,
+            zIndex: ANIM_VALUE_NINER,
+            transform: [horizontal ? { translateX: pan } : { translateY: pan }],
+            opacity: panOpacity,
+          }
+        : {
+            elevation: ANIM_VALUE_ZERO,
+            zIndex: ANIM_VALUE_ZERO,
+            transform: [
+              horizontal ? { translateX: anim } : { translateY: anim },
+            ],
+          },
+    ];
+  }, [props.style, isActive, horizontal, pan, panOpacity, anim]);
+  const onCellLayout = useCallback(
+    (evt: LayoutChangeEvent) => {
+      if (onLayout) {
+        onLayout(evt);
+      }
 
-  useEffect(() => {
+      const layout = evt.nativeEvent.layout;
+      layouts[key] = horizontal
+        ? { pos: layout.x, extent: layout.width }
+        : { pos: layout.y, extent: layout.height };
+    },
+    [onLayout, horizontal, key, layouts]
+  );
+  // #76 This is done as a memo instead of an effect because we want the anim change to start right
+  // away, even on this very render (e.g. cases where we set it immediately to zero), whereas an
+  // effect would render this without that change first, and then start changing anim.
+  const _animCharge = useMemo(() => {
     if (activeKey && !isActive && layouts.hasOwnProperty(activeKey)) {
       if (index >= panIndex && index <= activeIndex) {
-        Animated.timing(anim, {
+        return Animated.timing(anim, {
           duration: SLIDE_MILLIS,
           easing: Easing.inOut(Easing.linear),
           toValue: layouts[activeKey].extent,
           useNativeDriver: true,
         }).start();
-        setIsOffset(true);
-        return;
       } else if (index >= activeIndex && index <= panIndex) {
-        Animated.timing(anim, {
+        return Animated.timing(anim, {
           duration: SLIDE_MILLIS,
           easing: Easing.inOut(Easing.linear),
           toValue: -layouts[activeKey].extent,
           useNativeDriver: true,
         }).start();
-        setIsOffset(true);
-        return;
       }
     }
-    if (!activeKey) {
-      anim.setValue(0);
-    }
-    setIsOffset(false);
+    return Animated.timing(anim, {
+      duration: activeKey ? SLIDE_MILLIS : 0,
+      easing: Easing.inOut(Easing.linear),
+      toValue: 0,
+      useNativeDriver: true,
+    }).start();
   }, [activeKey, index, panIndex, key, activeIndex, horizontal]);
 
-  useEffect(() => {
-    if (!isOffset) {
-      Animated.timing(anim, {
-        duration: SLIDE_MILLIS,
-        easing: Easing.inOut(Easing.linear),
-        toValue: 0,
-        useNativeDriver: true,
-      }).start();
-    }
-  }, [isOffset]);
-
-  function onCellLayout(evt: LayoutChangeEvent) {
-    if (onLayout) {
-      onLayout(evt);
-    }
-
-    const layout = evt.nativeEvent.layout;
-    layouts[key] = horizontal
-      ? { pos: layout.x, extent: layout.width }
-      : { pos: layout.y, extent: layout.height };
-  }
-
   return (
-    <Animated.View
-      ref={ref}
-      key={key}
-      {...rest}
-      style={[
-        style,
-        isActive
-          ? {
-              ...elevations,
-              transform: [
-                horizontal ? { translateX: pan } : { translateY: pan },
-              ],
-              opacity: panOpacity,
-            }
-          : {
-              ...elevations,
-              transform: [
-                horizontal ? { translateX: anim } : { translateY: anim },
-              ],
-            },
-      ]}
-      onLayout={onCellLayout}
-    >
+    <Animated.View key={key} {...rest} style={style} onLayout={onCellLayout}>
       {children}
     </Animated.View>
   );

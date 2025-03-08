@@ -154,6 +154,9 @@ function DragListImpl<T>(
     [pan]
   );
 
+  // #76 - Add indirection to keyExtractor to change keys during reordering. Because native
+  // implementations can/do recycle views at times, you need to deliberately rekey things during
+  // reordering so the native implementation respects your new positions/styles/settings.
   const keyExtractorRef = useRef(keyExtractor);
   keyExtractorRef.current = useMemo(() => {
     return (item: T, index: number) => {
@@ -366,23 +369,6 @@ function DragListImpl<T>(
     dataRef.current = data;
   }, [data, reset]);
 
-  // useLayoutEffect(() => {
-  //   // #76 - Right before we render a reordered list, we hide the item being dragged. If we don't,
-  //   // an upcoming render will show it jumped back to its old spot briefly before it gets rendered
-  //   // back into its new spot (because the reset sets the pan position back to 0).
-  //   // #81 - Have to not do this on Android, because those items disappear forever. It's like
-  //   // Android recycles views and ignores the subsequent opacity reset, seemingly.
-  //   if (!isAndroid) {
-  //     panOpacity.setValue(0);
-  //   }
-  //   reset();
-
-  //   if (!isAndroid) {
-  //     // Lame, I know. Just need a way to reset opacity after the render is done.
-  //     setTimeout(() => panOpacity.setValue(1), 0);
-  //   }
-  // }, [data, reset]);
-
   const renderDragItem = useCallback(
     (info: ListRenderItemInfo<T>) => {
       const key = keyExtractorRef.current(info.item, info.index);
@@ -501,11 +487,6 @@ const AUTO_SCROLL_MILLIS = 200;
 const ANIM_VALUE_ZERO = new Animated.Value(0);
 const ANIM_VALUE_ONE = new Animated.Value(1);
 const ANIM_VALUE_NINER = new Animated.Value(999);
-const ZERO_ANIMATION_CELL_STYLE: Animated.AnimatedProps<ViewStyle> = {
-  elevation: ANIM_VALUE_ZERO,
-  zIndex: ANIM_VALUE_ZERO,
-  transform: [{ translateX: ANIM_VALUE_ZERO }, { translateY: ANIM_VALUE_ZERO }],
-};
 
 type CellRendererProps<T> = {
   item: T;
@@ -570,6 +551,9 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
   // effect would render this without that change first, and then start changing anim.
   const _animCharge = useMemo(() => {
     if (isReordering) {
+      // Do not change anim when reordering. Even though it seems safe to do, iOS v. Android
+      // could/do recycle views and changing the anim will cause things to visually jump even if you
+      // think your rendering code shouldn't have that problem.
       return;
     }
     if (activeKey && !isActive && layouts.hasOwnProperty(activeKey)) {
@@ -598,11 +582,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
   }, [activeKey, index, panIndex, key, activeIndex, horizontal, isReordering]);
 
   return (
-    <Animated.View
-      {...rest}
-      style={isReordering ? [props.style, ZERO_ANIMATION_CELL_STYLE] : style}
-      onLayout={onCellLayout}
-    >
+    <Animated.View {...rest} style={style} onLayout={onCellLayout}>
       {children}
     </Animated.View>
   );

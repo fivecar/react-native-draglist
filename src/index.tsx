@@ -348,6 +348,9 @@ function DragListImpl<T>(
             isReorderingRef.current = false;
           }
         } else {
+          // #76 - Only reset here if we're not going to reorder the list. If we are instead
+          // reordering the list, we shouldn't reset until after the useLayoutEffect is done, or
+          // else things will animate/jump around briefly.
           reset();
         }
       },

@@ -15,7 +15,6 @@ import {
   NativeScrollEvent,
   NativeSyntheticEvent,
   PanResponder,
-  Platform,
   StyleProp,
   View,
   ViewStyle,
@@ -56,8 +55,6 @@ export interface DragListRenderItemInfo<T> extends ListRenderItemInfo<T> {
    */
   isActive: boolean;
 }
-
-const isAndroid = Platform.OS === "android";
 
 // Used merely to trigger FlatList to re-render when necessary. Changing the
 // activeKey or the panIndex should both trigger re-render.
@@ -119,7 +116,6 @@ function DragListImpl<T>(
   // The following refs exist only to avoid unnecessary re-renders, so we keep them up to date
   // immediately using `useMemo` as opposed to `useEffect`, which allows them technically to be
   // wrong/off for one render (since effects run after a render is done).
-  const dataRef = useRef(data);
   const hoverRef = useRef(props.onHoverChanged);
   // #78 - keep onHoverChanged up to date in our ref
   hoverRef.current = useMemo(
@@ -128,6 +124,12 @@ function DragListImpl<T>(
   );
   const reorderRef = useRef(props.onReordered);
   reorderRef.current = useMemo(() => props.onReordered, [props.onReordered]);
+
+  // #76 When we finalize a reordering (i.e. when our parent gets `onReordered`), we need to
+  // insulate ourselves from the parent changing the data we render without us controlling the
+  // syncing of that change with all our animation state. So we render from dataRef instead of data
+  // directly, so that during reordering, we don't see the parent's data change.
+  const dataRef = useRef(data);
 
   const flatRef = useRef<FlatList<T> | null>(null);
   const flatWrapRef = useRef<View>(null);
@@ -326,19 +328,23 @@ function DragListImpl<T>(
             // stale).
             reorderingRef.current = true;
 
+            // #76 We need to control what we render so it's always in sync with our animation
+            // state. When we call onReordered, the parent can change the data we render without us
+            // being able to sync that change with our own state, so we insulate ourselves during
+            // this render by keeping our own copy of data. Our `useEffect` will run after the
+            // render that onReordered triggers, which will then restore our ref back to pointing at
+            // the parent's data.
             const dataCopy = [...dataRef.current];
-            const removed = dataCopy.splice(activeIndex.current, 1);
-            dataCopy.splice(panIndex.current, 0, removed[0]);
+            const itemToMove = dataCopy.splice(activeIndex.current, 1);
+            dataCopy.splice(panIndex.current, 0, itemToMove[0]);
             dataRef.current = dataCopy;
 
             await reorderRef.current?.(activeIndex.current, panIndex.current);
           } finally {
+            reset(); // Guarantee resetting by putting this in finally
             reorderingRef.current = false;
           }
         } else {
-          // #76 - Only reset here if we're not going to reorder the list. If we are instead
-          // reordering the list, we shouldn't reset until after the useLayoutEffect is done, or
-          // else things will animate/jump around briefly.
           reset();
         }
       },
@@ -360,14 +366,11 @@ function DragListImpl<T>(
   }, []);
 
   useEffect(() => {
-    if (activeKey.current) {
-      // Reset causes a re-render, so only do so if we are currently dragging around. Note the reset
-      // should happen before updating dataRef because the latter is referenced by the pan
-      // responders, and if you're in this case here, you're presumably mid-pan.
-      reset();
-    }
+    // #76 Deliberately sync dataRef with a useEffect, not a useMemo, so that we update it after
+    // rendering. This only truly matters during a reorder-triggered rendering, where we keep our
+    // own copy of `data`.
     dataRef.current = data;
-  }, [data, reset]);
+  }, [data]);
 
   const renderDragItem = useCallback(
     (info: ListRenderItemInfo<T>) => {

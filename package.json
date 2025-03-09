@@ -1,6 +1,6 @@
 {
   "name": "react-native-draglist",
-  "version": "3.9.3",
+  "version": "3.9.4",
   "description": "FlatList that reorders items by dragging",
   "main": "dist/index.js",
   "module": "dist/index.modern.js",

@@ -79,14 +79,12 @@ export default function DraggableLyrics() {
   }
 
   return (
-    <View>
       <DragList
         data={data}
         keyExtractor={keyExtractor}
         onReordered={onReordered}
         renderItem={renderItem}
       />
-    </View>
   );
 }
 ```
@@ -102,12 +100,12 @@ All `FlatList` properties are supported, with the following extensions/modificat
 |`onDragEnd`|`() => void`|Your item should call this function when you detect a tap or drag ending. A common implementation is to have a drag handle whose `onPressOut` calls `onDragEnd`. If you don't call this during `onPressOut`, *DragList* will not realize your item is no longer active if the user taps but doesn't drag (because you will have called `onDragStart`, and yet *DragList* couldn't capture the pan responder from you because the user hasn't moved, thus it doesn't know when the user releases).
 |`isActive`|`boolean`|This is `true` iff the current item is actively being dragged by the user. This can be used to render the item differently while it's being dragged (e.g. less opacity, different background color, borders, etc).
 
-- `async onReordered(fromIndex: number, toIndex: number)` is called once the user drops a dragged item in its new position. This is *not called* if the user drops the item back in the spot it started. `DragList` will await this function, and not reset its UI until it completes, so that you can make modifications to the underlying data before the list resets its state.
-  - `fromIndex` will be between `0` and `data.length` (the total number of items you gave `DragList` to render).
-  - `toIndex` reflects the position to which the item should be moved in the pre-modified `data`. It will never equal `fromIndex`. So, for instance, if `toIndex` is `0`, you should make `data[fromIndex]` the first element of `data`. **Note**: if the user drags the item to the very end of the list, `toIndex` will equal `data.length` (i.e. it will reference an index that is one beyond the end of the list).
-- `onHoverChanged(index: number)` (optional): called whenever an item being dragged changes its index in the list. Note this is only called when the item hasn't been dropped into its final (potentially new) index yet — it's only called as the item hovers around various indices that it could be dropped at.
+- `async onReordered(fromIndex: number, toIndex: number)` is called once the user drops a dragged item in its new position. This is *not called* if the user drops the item back in the spot it started. `DragList` will await this function and not reset its UI until it completes, so you can make modifications to the underlying data before the list resets its state.
+  - `fromIndex` will be between `[0, data.length)` (that is, any valid index from the items you gave it).
+  - `toIndex` reflects the position to which the item should be moved in the pre-modified `data`. It will never equal `fromIndex`. So, for instance, if `toIndex` is `0`, you should make `data[fromIndex]` the first element of `data`. **Note**: if the user drags the item to the very end of the list, `toIndex` will equal `data.length` (i.e. it will reference an index that is one beyond the end of the list -- the range of values is `[0, data.length]`).
+- `onHoverChanged(index: number)` (optional): called whenever an item being dragged changes its index in the list. Note this is only called when the item hasn't been dropped into its final (potentially new) index yet — it's called as the item hovers around various indices it could be dropped at.
 - `ref: React.RefObject<FlatList<T>>` (optional): You can optionally pass a ref, which DragList will tunnel through to the underlying FlatList (via `forwardRef`). This is useful, for instance, if you want to `scrollToIndex` yourself on the underlying list.
-- `CustomFlatList: typeof FlatList` (optional): You can pass any component that implements the same interface as `FlatList`. Note that the component needs to support all sorts of `FlatList` things (e.g. `ref`, `scrollToPos`, etc) — i.e. it needs to implement the whole `FlatList` interface, not be just a `React.ComponentType<FlatListProps<T>>`. 
+- `CustomFlatList: typeof FlatList` (optional): You can pass any component that implements the same interface as `FlatList`. Note: the component needs to support all sorts of `FlatList` things (e.g. `ref`, `scrollToPos`, etc) — i.e. it needs to implement the whole `FlatList` interface, not be just a `React.ComponentType<FlatListProps<T>>`. 
 
 ## Example Included
 To play with the list, you can run the example within `example/`:

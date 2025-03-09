@@ -386,6 +386,7 @@ function DragListImpl<T>(
     // rendering. This only truly matters during a reorder-triggered rendering, where we keep our
     // own copy of `data`.
     dataRef.current = data;
+    setExtra({ activeKey: null, panIndex: -1 }); // Trigger a re-render whenever data changes
   }, [data]);
 
   const renderDragItem = useCallback(

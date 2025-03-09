@@ -106,20 +106,30 @@ export default function DraggableLyrics() {
 }
 ```
 
-### More Discussion
-For a great write-up with more details about how to use this library, see [this post](https://xebia.com/blog/drag-drop-sort-implementing-draggable-sorting-in-react-native/) by [Bart den Hollander](https://github.com/hollanderbart).
-
 ## Example Included
-To play with the list, you can run the example within `example/` in order to test the list yourself by first installing all necessary packages:
+To play with the list, you can run the example within `example/`:
 
 ```console
 npm install
 cd example
-npm install   # You also need to run this whenever you edit the DragList code.
+npm install
 npm run android   # or `npm run ios`, which takes longer to build
 ```
 
-# Caveats
+# FAQs
+
+## How can I contribute?
+Thanks for being willing! Please see
+[CONTRIBUTING.md](https://github.com/fivecar/react-native-draglist/blob/main/CONTRIBUTING.md). I'd
+love your help.
+
+## What about lists with multiple columns?
+This package makes no attempt to handle multi-column lists. I'm happy to look at PRs that attempt
+such things, but I suspect most attempts will be fraught with issues because the UX for dragging in
+a multi-column list isn't immediately obvious, especially when the underlying `FlatList`
+implementation can't be controlled from the outside.
+
+## Do you have caveats?
 This package is implemented with probably 1/10th the files, and 1/20th the advanced concepts, as `react-native-draggable-flatlist`. The latter even directly modifies unpublished internal data structures of `react-native-reanimated`, so it's all sorts of advanced in ways that this package will never be. You should prefer, and default to, using `react-native-draggable-flatlist` unless its random hangs and crashes bother you.
 
 If you have suggestions, or better yet, PRs for how this package can be improved, [please connect via GitHub](https://github.com/fivecar/react-native-draglist/)!

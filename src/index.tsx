@@ -64,6 +64,8 @@ export interface DragListRenderItemInfo<T> extends ListRenderItemInfo<T> {
 interface ExtraData {
   activeKey: string | null;
   panIndex: number;
+  // Used only to assure WDYR that we're intentionally re-rendering with a "different" object
+  detritus?: string;
 }
 
 interface Props<T> extends Omit<FlatListProps<T>, "renderItem"> {
@@ -374,7 +376,11 @@ function DragListImpl<T>(
   const reset = useCallback(() => {
     activeDataRef.current = null;
     panIndex.current = -1;
-    setExtra({ activeKey: null, panIndex: -1 });
+    setExtra({
+      activeKey: null,
+      panIndex: -1,
+      detritus: Math.random().toString(),
+    });
     setPan(0);
     panGrantedRef.current = false;
     grantActiveCenterOffsetRef.current = 0;
@@ -386,7 +392,11 @@ function DragListImpl<T>(
     // rendering. This only truly matters during a reorder-triggered rendering, where we keep our
     // own copy of `data`.
     dataRef.current = data;
-    setExtra({ activeKey: null, panIndex: -1 }); // Trigger a re-render whenever data changes
+    setExtra({
+      activeKey: null,
+      panIndex: -1,
+      detritus: Math.random().toString(),
+    }); // Trigger a re-render whenever data changes
   }, [data]);
 
   const renderDragItem = useCallback(

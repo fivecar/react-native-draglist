@@ -128,6 +128,8 @@ function DragListImpl<T>(
   );
   const reorderRef = useRef(props.onReordered);
   reorderRef.current = useMemo(() => props.onReordered, [props.onReordered]);
+  const keyExtractorRef = useRef(keyExtractor);
+  keyExtractorRef.current = useMemo(() => keyExtractor, [keyExtractor]);
 
   // #76 When we finalize a reordering (i.e. when our parent gets `onReordered`), we need to
   // insulate ourselves from the parent changing the data we render without us controlling the
@@ -159,20 +161,6 @@ function DragListImpl<T>(
     },
     [pan]
   );
-
-  // #76 - Add indirection to keyExtractor to change keys during reordering. Because native
-  // implementations can/do recycle views at times, you need to deliberately rekey things during
-  // reordering so the native implementation respects your new positions/styles/settings.
-  const keyExtractorRef = useRef(keyExtractor);
-  keyExtractorRef.current = useMemo(() => {
-    return (item: T, index: number) => {
-      const key = keyExtractor(item, index);
-      if (isReorderingRef.current) {
-        return key + "_reordering";
-      }
-      return key;
-    };
-  }, [keyExtractor]);
 
   const shouldCapturePan = useCallback(() => {
     return !!activeDataRef.current && !isReorderingRef.current;
@@ -341,8 +329,10 @@ function DragListImpl<T>(
 
           await reorderRef.current?.(activeIndex, panIndex.current);
         } finally {
-          reset(); // Guarantee resetting by putting this in finally
+          // This needs to come before reset(), which causes a re-render that depends on
+          // isReorderingRef.current reflecting the fact we're not reordering anymore.
           isReorderingRef.current = false;
+          reset(); // Guarantee resetting by putting this in finally
         }
       } else {
         // #76 - Only reset here if we're not going to reorder the list. If we are instead

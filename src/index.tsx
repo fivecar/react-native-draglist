@@ -17,6 +17,7 @@ import {
   NativeSyntheticEvent,
   PanResponder,
   PanResponderGestureState,
+  Platform,
   StyleProp,
   View,
   ViewStyle,
@@ -525,6 +526,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
     layouts,
     horizontal,
   } = useDragListContext<T>();
+  const cellRef = useRef<View>(null);
   const key = keyExtractor(item, index);
   const isActive = key === activeData?.key;
   const anim = useRef(new Animated.Value(0)).current;
@@ -604,8 +606,25 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
     }).start();
   }, [index, panIndex, key, activeData, horizontal, isReordering]);
 
+  if (Platform.OS == "web") {
+    // RN Web does not fire onLayout as expected
+    // Workaround for https://github.com/necolas/react-native-web/issues/2481
+    useEffect(() => {
+      cellRef.current?.measure((x, y, w, h) => {
+        layouts[key] = horizontal
+          ? { pos: x, extent: w }
+          : { pos: y, extent: h };
+      });
+    }, [index]);
+  }
+
   return (
-    <Animated.View {...rest} style={style} onLayout={onCellLayout}>
+    <Animated.View
+      {...rest}
+      style={style}
+      onLayout={onCellLayout}
+      ref={cellRef}
+    >
       {children}
     </Animated.View>
   );

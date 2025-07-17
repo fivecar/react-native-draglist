@@ -123,14 +123,18 @@ function DragListImpl<T>(
   // wrong/off for one render (since effects run after a render is done).
   const hoverRef = useRef(props.onHoverChanged);
   // #78 - keep onHoverChanged up to date in our ref
-  hoverRef.current = useMemo(
-    () => props.onHoverChanged,
-    [props.onHoverChanged]
-  );
+  useEffect(() => {
+    hoverRef.current = props.onHoverChanged;
+  }, [props.onHoverChanged]);
+
   const reorderRef = useRef(props.onReordered);
-  reorderRef.current = useMemo(() => props.onReordered, [props.onReordered]);
+  useEffect(() => {
+    reorderRef.current = props.onReordered;
+  }, [props.onReordered]);
   const keyExtractorRef = useRef(keyExtractor);
-  keyExtractorRef.current = useMemo(() => keyExtractor, [keyExtractor]);
+  useEffect(() => {
+    keyExtractorRef.current = keyExtractor;
+  }, [keyExtractor]);
 
   // #76 When we finalize a reordering (i.e. when our parent gets `onReordered`), we need to
   // insulate ourselves from the parent changing the data we render without us controlling the

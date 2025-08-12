@@ -127,11 +127,9 @@ function DragListImpl<T>(
   const keyExtractorRef = useRef(keyExtractor);
   keyExtractorRef.current = keyExtractor;
 
-  // #76 When we finalize a reordering (i.e. when our parent gets `onReordered`), we need to
-  // insulate ourselves from the parent changing the data we render without us controlling the
-  // syncing of that change with all our animation state. So we render from dataRef instead of data
-  // directly, so that during reordering, we don't see the parent's data change.
   const dataRef = useRef(data);
+  dataRef.current = data;
+
   const lastDataRef = useRef(data);
   const dataGenRef = useRef(0);
 
@@ -314,23 +312,12 @@ function DragListImpl<T>(
           // stale).
           isReorderingRef.current = true;
 
-          // #76 We need to control what we render so it's always in sync with our animation
-          // state. When we call onReordered, the parent can change the data we render without us
-          // being able to sync that change with our own state, so we insulate ourselves during
-          // this render by keeping our own copy of data. Our `useEffect` will run after the
-          // render that onReordered triggers, which will then restore our ref back to pointing at
-          // the parent's data.
-          const dataCopy = [...dataRef.current];
-          const itemToMove = dataCopy.splice(activeIndex, 1);
-          dataCopy.splice(panIndex.current, 0, itemToMove[0]);
-          dataRef.current = dataCopy;
-
           await reorderRef.current?.(activeIndex, panIndex.current);
         } finally {
           // This needs to come before reset(), which causes a re-render that depends on
           // isReorderingRef.current reflecting the fact we're not reordering anymore.
           isReorderingRef.current = false;
-          // reset(); // Guarantee resetting by putting this in finally
+          // reset(); // Things will be reset when we rev the dataGenRef
         }
       } else {
         // #76 - Only reset here if we're not going to reorder the list. If we are instead
@@ -385,13 +372,6 @@ function DragListImpl<T>(
 
   useLayoutEffect(() => {
     // setPan(0);
-  }, [data]);
-
-  useEffect(() => {
-    // #76 Deliberately sync dataRef with a useEffect, not a useMemo, so that we update it after
-    // rendering. This only truly matters during a reorder-triggered rendering, where we keep our
-    // own copy of `data`.
-    dataRef.current = data;
   }, [data]);
 
   const renderDragItem = useCallback(

@@ -592,12 +592,12 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
         }
       }
     }
-    // return Animated.timing(anim, {
-    //   duration: activeData?.key ? SLIDE_MILLIS : 0,
-    //   easing: Easing.inOut(Easing.linear),
-    //   toValue: 0,
-    //   useNativeDriver: true,
-    // }).start();
+    return Animated.timing(anim, {
+      duration: activeData?.key ? SLIDE_MILLIS : 0,
+      easing: Easing.inOut(Easing.linear),
+      toValue: 0,
+      useNativeDriver: true,
+    }).start();
   }, [index, panIndex, activeData, isReordering]);
 
   useLayoutEffect(() => {

@@ -1,12 +1,5 @@
 import React, {useMemo, useState} from 'react';
-import {
-  Button,
-  FlatList,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import {FlatList, StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import DragList, {DragListRenderItemInfo} from 'react-native-draglist';
 
 const SOUND_OF_SILENCE = ['hello', 'darkness', 'my', 'old', 'friend'];
@@ -86,7 +79,7 @@ export default function DraggableLyrics() {
         onReordered={onReordered}
         renderItem={renderItem}
       />
-      <Text style={styles.header}>Auto-Scrolling List</Text>
+      {/* <Text style={styles.header}>Auto-Scrolling List</Text>
       <DragList
         style={styles.scrolledList}
         ref={listRef} // Verify that using the ref works
@@ -108,7 +101,7 @@ export default function DraggableLyrics() {
         keyExtractor={keyExtractor}
         onReordered={onReorderedHorz}
         renderItem={renderItem}
-      />
+      /> */}
     </View>
   );
 }

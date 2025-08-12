@@ -1,6 +1,7 @@
 import React, {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -131,6 +132,8 @@ function DragListImpl<T>(
   // syncing of that change with all our animation state. So we render from dataRef instead of data
   // directly, so that during reordering, we don't see the parent's data change.
   const dataRef = useRef(data);
+  const lastDataRef = useRef(data);
+  const dataGenRef = useRef(0);
 
   const flatRef = useRef<FlatList<T> | null>(null);
   const flatWrapRef = useRef<View>(null);
@@ -327,7 +330,7 @@ function DragListImpl<T>(
           // This needs to come before reset(), which causes a re-render that depends on
           // isReorderingRef.current reflecting the fact we're not reordering anymore.
           isReorderingRef.current = false;
-          reset(); // Guarantee resetting by putting this in finally
+          // reset(); // Guarantee resetting by putting this in finally
         }
       } else {
         // #76 - Only reset here if we're not going to reorder the list. If we are instead
@@ -366,22 +369,29 @@ function DragListImpl<T>(
       panIndex: -1,
       detritus: Math.random().toString(),
     });
-    setPan(0);
+    // setPan(0);
     panGrantedRef.current = false;
     grantActiveCenterOffsetRef.current = 0;
     clearAutoScrollTimer();
   }, []);
+
+  if (lastDataRef.current !== data) {
+    lastDataRef.current = data;
+    dataGenRef.current++;
+    console.log(`New dataGenRef.current: ${dataGenRef.current}`);
+    reset();
+  }
+  console.log(`dataGenRef.current: ${dataGenRef.current}`);
+
+  useLayoutEffect(() => {
+    // setPan(0);
+  }, [data]);
 
   useEffect(() => {
     // #76 Deliberately sync dataRef with a useEffect, not a useMemo, so that we update it after
     // rendering. This only truly matters during a reorder-triggered rendering, where we keep our
     // own copy of `data`.
     dataRef.current = data;
-    setExtra({
-      activeKey: null,
-      panIndex: -1,
-      detritus: Math.random().toString(),
-    }); // Trigger a re-render whenever data changes
   }, [data]);
 
   const renderDragItem = useCallback(
@@ -461,6 +471,7 @@ function DragListImpl<T>(
       isReordering={isReorderingRef.current}
       layouts={layouts}
       horizontal={props.horizontal}
+      dataGen={dataGenRef.current}
     >
       <View
         ref={flatWrapRef}
@@ -479,8 +490,10 @@ function DragListImpl<T>(
               }
             }
           }}
-          keyExtractor={keyExtractorRef.current}
-          data={dataRef.current}
+          keyExtractor={(item, index) =>
+            keyExtractorRef.current(item, index) + dataGenRef.current
+          }
+          data={data}
           renderItem={renderDragItem}
           CellRendererComponent={CellRendererComponent}
           extraData={extra}
@@ -519,8 +532,10 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
     isReordering,
     layouts,
     horizontal,
+    dataGen,
   } = useDragListContext<T>();
   const cellRef = useRef<View>(null);
+  const lastRenderedGenRef = useRef(dataGen);
   const key = keyExtractor(item, index);
   const isActive = key === activeData?.key;
   const anim = useRef(new Animated.Value(0)).current;
@@ -529,6 +544,10 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
   // for Animated.View's elevation and zIndex. I (fivecar) don't understand why.
   // If you use raw numbers, the elevation and zIndex don't have an effect.
   const style = useMemo(() => {
+    const isNewGen = dataGen !== lastRenderedGenRef.current;
+    console.log(
+      `isNewGen: ${isNewGen}, gen: ${dataGen} vs last ${lastRenderedGenRef.current}`
+    );
     return [
       props.style,
       isActive
@@ -545,7 +564,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
             ],
           },
     ];
-  }, [props.style, isActive, horizontal, pan, anim]);
+  }, [props.style, isActive, horizontal, pan, anim, dataGen]);
   const onCellLayout = useCallback(
     (evt: LayoutChangeEvent) => {
       if (onLayout) {
@@ -559,6 +578,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
     },
     [onLayout, horizontal, key, layouts]
   );
+
   // #76 This is done as a memo instead of an effect because we want the anim change to start right
   // away, even on this very render (e.g. cases where we set it immediately to zero), whereas an
   // effect would render this without that change first, and then start changing anim.
@@ -592,13 +612,25 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
         }
       }
     }
-    return Animated.timing(anim, {
-      duration: activeData?.key ? SLIDE_MILLIS : 0,
-      easing: Easing.inOut(Easing.linear),
-      toValue: 0,
-      useNativeDriver: true,
-    }).start();
-  }, [index, panIndex, key, activeData, horizontal, isReordering]);
+    // return Animated.timing(anim, {
+    //   duration: activeData?.key ? SLIDE_MILLIS : 0,
+    //   easing: Easing.inOut(Easing.linear),
+    //   toValue: 0,
+    //   useNativeDriver: true,
+    // }).start();
+  }, [index, panIndex, activeData, isReordering]);
+
+  useLayoutEffect(() => {
+    if (lastRenderedGenRef.current !== dataGen) {
+      lastRenderedGenRef.current = dataGen;
+      console.log(`anim reset for gen ${dataGen} on index ${index}`);
+      Animated.timing(anim, {
+        duration: 0,
+        toValue: 0,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [dataGen]);
 
   if (Platform.OS == "web") {
     // RN Web does not fire onLayout as expected
@@ -618,6 +650,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
       style={style}
       onLayout={onCellLayout}
       ref={cellRef}
+      key={key + dataGen}
     >
       {children}
     </Animated.View>

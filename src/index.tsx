@@ -371,7 +371,7 @@ function DragListImpl<T>(
   console.log(`dataGenRef.current: ${dataGenRef.current}`);
 
   useLayoutEffect(() => {
-    // setPan(0);
+    setPan(0);
   }, [data]);
 
   const renderDragItem = useCallback(

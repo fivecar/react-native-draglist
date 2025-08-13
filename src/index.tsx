@@ -127,6 +127,16 @@ function DragListImpl<T>(
   const keyExtractorRef = useRef(keyExtractor);
   keyExtractorRef.current = keyExtractor;
 
+  // We force items to re-render when data changes. This is suboptimal, because most of the time
+  // when data changes we're just reordering things, which shouldn't need re-rendering their
+  // children. However, React Native reuses recycled native views if you keep keys the same, which
+  // makes the items jump around visually even if the code explicitly doesn't ask for it (because of
+  // lag between setting animation values and the JS bridge when you useNativeDriver). So we
+  // deliberately combine each item's key with the rendering generation number.
+  const generationKeyExtractor = useCallback((item: T, index: number) => {
+    return keyExtractorRef.current(item, index) + dataGenRef.current;
+  }, []);
+
   const dataRef = useRef(data);
   dataRef.current = data;
 
@@ -314,15 +324,12 @@ function DragListImpl<T>(
 
           await reorderRef.current?.(activeIndex, panIndex.current);
         } finally {
-          // This needs to come before reset(), which causes a re-render that depends on
-          // isReorderingRef.current reflecting the fact we're not reordering anymore.
           isReorderingRef.current = false;
-          // reset(); // Things will be reset when we rev the dataGenRef
         }
       } else {
         // #76 - Only reset here if we're not going to reorder the list. If we are instead
-        // reordering the list, we shouldn't reset until after the useLayoutEffect is done, or
-        // else things will animate/jump around briefly.
+        // reordering the list, we reset once the parent updates data. Otherwise things will jump
+        // around visually.
         reset();
       }
     },
@@ -348,28 +355,38 @@ function DragListImpl<T>(
     }
   }, []);
 
-  const reset = useCallback(() => {
+  /**
+   * When you don't want to trigger a re-render, pass false so we don't setExtra.
+   */
+  const reset = useCallback((shouldSetExtra = true) => {
     activeDataRef.current = null;
     panIndex.current = -1;
-    setExtra({
-      activeKey: null,
-      panIndex: -1,
-      detritus: Math.random().toString(),
-    });
-    // setPan(0);
+    // setPan(0); Deliberately not handled here in render path, but in useLayoutEffect
+    if (shouldSetExtra) {
+      setExtra({
+        // Trigger re-render
+        activeKey: null,
+        panIndex: -1,
+        detritus: Math.random().toString(),
+      });
+    }
     panGrantedRef.current = false;
     grantActiveCenterOffsetRef.current = 0;
     clearAutoScrollTimer();
   }, []);
 
+  // Whenever new content arrives, we bump the generation number so stale animations don't continue
+  // to apply.
   if (lastDataRef.current !== data) {
     lastDataRef.current = data;
     dataGenRef.current++;
-    console.log(`New dataGenRef.current: ${dataGenRef.current}`);
-    reset();
+    reset(false); // Don't trigger re-render because we're already rendering.
   }
-  console.log(`dataGenRef.current: ${dataGenRef.current}`);
 
+  // For reasons unclear to me, you need this useLayoutEffect here -- _even if you have an empty
+  // function body_. That's right. Having it here changes timings or something in React Native so
+  // our rendering is reset correctly, even if you do absolutely nothing in the function. As it
+  // stands, we need to reset the pan, so it's all good.
   useLayoutEffect(() => {
     setPan(0);
   }, [data]);
@@ -470,9 +487,7 @@ function DragListImpl<T>(
               }
             }
           }}
-          keyExtractor={(item, index) =>
-            keyExtractorRef.current(item, index) + dataGenRef.current
-          }
+          keyExtractor={generationKeyExtractor}
           data={data}
           renderItem={renderDragItem}
           CellRendererComponent={CellRendererComponent}
@@ -515,7 +530,6 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
     dataGen,
   } = useDragListContext<T>();
   const cellRef = useRef<View>(null);
-  const lastRenderedGenRef = useRef(dataGen);
   const key = keyExtractor(item, index);
   const isActive = key === activeData?.key;
   const anim = useRef(new Animated.Value(0)).current;
@@ -524,10 +538,6 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
   // for Animated.View's elevation and zIndex. I (fivecar) don't understand why.
   // If you use raw numbers, the elevation and zIndex don't have an effect.
   const style = useMemo(() => {
-    const isNewGen = dataGen !== lastRenderedGenRef.current;
-    console.log(
-      `isNewGen: ${isNewGen}, gen: ${dataGen} vs last ${lastRenderedGenRef.current}`
-    );
     return [
       props.style,
       isActive
@@ -544,7 +554,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
             ],
           },
     ];
-  }, [props.style, isActive, horizontal, pan, anim, dataGen]);
+  }, [props.style, isActive, horizontal, pan, anim]);
   const onCellLayout = useCallback(
     (evt: LayoutChangeEvent) => {
       if (onLayout) {
@@ -600,17 +610,15 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
     }).start();
   }, [index, panIndex, activeData, isReordering]);
 
+  // This resets our anim whenever a next generation of data arrives, so things are never translated
+  // to non-zero positions by the time we render new content.
   useLayoutEffect(() => {
-    if (lastRenderedGenRef.current !== dataGen) {
-      lastRenderedGenRef.current = dataGen;
-      console.log(`anim reset for gen ${dataGen} on index ${index}`);
-      Animated.timing(anim, {
-        duration: 0,
-        toValue: 0,
-        useNativeDriver: true,
-      }).start();
-    }
-  }, [dataGen]);
+    Animated.timing(anim, {
+      duration: 0,
+      toValue: 0,
+      useNativeDriver: true,
+    }).start();
+  }, [dataGen]); // Do not get rid of dataGen here - the whole point is to run when it changes.
 
   if (Platform.OS == "web") {
     // RN Web does not fire onLayout as expected

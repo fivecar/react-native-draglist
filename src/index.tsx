@@ -467,7 +467,6 @@ function DragListImpl<T>(
       keyExtractor={keyExtractorRef.current}
       pan={pan}
       panIndex={panIndex.current}
-      isReordering={isReorderingRef.current}
       layouts={layouts}
       horizontal={props.horizontal}
       dataGen={dataGenRef.current}
@@ -526,7 +525,6 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
     activeData,
     pan,
     panIndex,
-    isReordering,
     layouts,
     horizontal,
     dataGen,
@@ -600,7 +598,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
       toValue: 0,
       useNativeDriver: true,
     }).start();
-  }, [index, panIndex, activeData, isReordering]);
+  }, [index, panIndex, activeData]);
 
   // This resets our anim whenever a next generation of data arrives, so things are never translated
   // to non-zero positions by the time we render new content.

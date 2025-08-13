@@ -571,17 +571,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
     [onLayout, horizontal, key, layouts]
   );
 
-  // #76 This is done as a memo instead of an effect because we want the anim change to start right
-  // away, even on this very render (e.g. cases where we set it immediately to zero), whereas an
-  // effect would render this without that change first, and then start changing anim.
-  const _animChange = useMemo(() => {
-    if (isReordering) {
-      // Do not change anim when reordering. Even though it seems safe to do, iOS v. Android
-      // could/do recycle views and changing the anim will cause things to visually jump even if you
-      // think your rendering code shouldn't have that problem.
-      return;
-    }
-
+  useEffect(() => {
     if (activeData != null) {
       const activeKey = activeData.key;
       const activeIndex = activeData.index;

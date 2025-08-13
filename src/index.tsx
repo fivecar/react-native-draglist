@@ -1,6 +1,7 @@
 import React, {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -126,11 +127,23 @@ function DragListImpl<T>(
   const keyExtractorRef = useRef(keyExtractor);
   keyExtractorRef.current = keyExtractor;
 
-  // #76 When we finalize a reordering (i.e. when our parent gets `onReordered`), we need to
-  // insulate ourselves from the parent changing the data we render without us controlling the
-  // syncing of that change with all our animation state. So we render from dataRef instead of data
-  // directly, so that during reordering, we don't see the parent's data change.
+  // We force items to re-render when data changes. This is suboptimal, because most of the time
+  // when data changes we're just reordering things, which shouldn't need re-rendering their
+  // children. However, React Native reuses recycled native views if you keep keys the same, which
+  // makes the items jump around visually even if the code explicitly doesn't ask for it (because of
+  // lag between setting animation values and the JS bridge when you useNativeDriver). So we
+  // deliberately combine each item's key with the rendering generation number.
+  const generationKeyExtractor = useCallback((item: T, index: number) => {
+    return keyExtractorRef.current(item, index) + dataGenRef.current;
+  }, []);
+
   const dataRef = useRef(data);
+  dataRef.current = data;
+
+  // In order to sync our animations with when the parent changes `data` on us, we render in
+  // "generations". Whenever the parent-provided data changes, we bump the generation.
+  const lastDataRef = useRef(data);
+  const dataGenRef = useRef(0);
 
   const flatRef = useRef<FlatList<T> | null>(null);
   const flatWrapRef = useRef<View>(null);
@@ -311,28 +324,14 @@ function DragListImpl<T>(
           // stale).
           isReorderingRef.current = true;
 
-          // #76 We need to control what we render so it's always in sync with our animation
-          // state. When we call onReordered, the parent can change the data we render without us
-          // being able to sync that change with our own state, so we insulate ourselves during
-          // this render by keeping our own copy of data. Our `useEffect` will run after the
-          // render that onReordered triggers, which will then restore our ref back to pointing at
-          // the parent's data.
-          const dataCopy = [...dataRef.current];
-          const itemToMove = dataCopy.splice(activeIndex, 1);
-          dataCopy.splice(panIndex.current, 0, itemToMove[0]);
-          dataRef.current = dataCopy;
-
           await reorderRef.current?.(activeIndex, panIndex.current);
         } finally {
-          // This needs to come before reset(), which causes a re-render that depends on
-          // isReorderingRef.current reflecting the fact we're not reordering anymore.
           isReorderingRef.current = false;
-          reset(); // Guarantee resetting by putting this in finally
         }
       } else {
         // #76 - Only reset here if we're not going to reorder the list. If we are instead
-        // reordering the list, we shouldn't reset until after the useLayoutEffect is done, or
-        // else things will animate/jump around briefly.
+        // reordering the list, we reset once the parent updates data. Otherwise things will jump
+        // around visually.
         reset();
       }
     },
@@ -358,30 +357,40 @@ function DragListImpl<T>(
     }
   }, []);
 
-  const reset = useCallback(() => {
+  /**
+   * When you don't want to trigger a re-render, pass false so we don't setExtra.
+   */
+  const reset = useCallback((shouldSetExtra = true) => {
     activeDataRef.current = null;
     panIndex.current = -1;
-    setExtra({
-      activeKey: null,
-      panIndex: -1,
-      detritus: Math.random().toString(),
-    });
-    setPan(0);
+    // setPan(0); Deliberately not handled here in render path, but in useLayoutEffect
+    if (shouldSetExtra) {
+      setExtra({
+        // Trigger re-render
+        activeKey: null,
+        panIndex: -1,
+        detritus: Math.random().toString(),
+      });
+    }
     panGrantedRef.current = false;
     grantActiveCenterOffsetRef.current = 0;
     clearAutoScrollTimer();
   }, []);
 
-  useEffect(() => {
-    // #76 Deliberately sync dataRef with a useEffect, not a useMemo, so that we update it after
-    // rendering. This only truly matters during a reorder-triggered rendering, where we keep our
-    // own copy of `data`.
-    dataRef.current = data;
-    setExtra({
-      activeKey: null,
-      panIndex: -1,
-      detritus: Math.random().toString(),
-    }); // Trigger a re-render whenever data changes
+  // Whenever new content arrives, we bump the generation number so stale animations don't continue
+  // to apply.
+  if (lastDataRef.current !== data) {
+    lastDataRef.current = data;
+    dataGenRef.current++;
+    reset(false); // Don't trigger re-render because we're already rendering.
+  }
+
+  // For reasons unclear to me, you need this useLayoutEffect here -- _even if you have an empty
+  // function body_. That's right. Having it here changes timings or something in React Native so
+  // our rendering is reset correctly, even if you do absolutely nothing in the function. As it
+  // stands, we need to reset the pan, so it's all good.
+  useLayoutEffect(() => {
+    setPan(0);
   }, [data]);
 
   const renderDragItem = useCallback(
@@ -461,6 +470,7 @@ function DragListImpl<T>(
       isReordering={isReorderingRef.current}
       layouts={layouts}
       horizontal={props.horizontal}
+      dataGen={dataGenRef.current}
     >
       <View
         ref={flatWrapRef}
@@ -479,8 +489,8 @@ function DragListImpl<T>(
               }
             }
           }}
-          keyExtractor={keyExtractorRef.current}
-          data={dataRef.current}
+          keyExtractor={generationKeyExtractor}
+          data={data}
           renderItem={renderDragItem}
           CellRendererComponent={CellRendererComponent}
           extraData={extra}
@@ -519,6 +529,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
     isReordering,
     layouts,
     horizontal,
+    dataGen,
   } = useDragListContext<T>();
   const cellRef = useRef<View>(null);
   const key = keyExtractor(item, index);
@@ -559,10 +570,11 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
     },
     [onLayout, horizontal, key, layouts]
   );
+
   // #76 This is done as a memo instead of an effect because we want the anim change to start right
   // away, even on this very render (e.g. cases where we set it immediately to zero), whereas an
   // effect would render this without that change first, and then start changing anim.
-  const _animCharge = useMemo(() => {
+  const _animChange = useMemo(() => {
     if (isReordering) {
       // Do not change anim when reordering. Even though it seems safe to do, iOS v. Android
       // could/do recycle views and changing the anim will cause things to visually jump even if you
@@ -598,7 +610,17 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
       toValue: 0,
       useNativeDriver: true,
     }).start();
-  }, [index, panIndex, key, activeData, horizontal, isReordering]);
+  }, [index, panIndex, activeData, isReordering]);
+
+  // This resets our anim whenever a next generation of data arrives, so things are never translated
+  // to non-zero positions by the time we render new content.
+  useLayoutEffect(() => {
+    Animated.timing(anim, {
+      duration: 0,
+      toValue: 0,
+      useNativeDriver: true,
+    }).start();
+  }, [dataGen]); // Do not get rid of dataGen here - the whole point is to run when it changes.
 
   if (Platform.OS == "web") {
     // RN Web does not fire onLayout as expected
@@ -618,6 +640,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
       style={style}
       onLayout={onCellLayout}
       ref={cellRef}
+      key={key}
     >
       {children}
     </Animated.View>

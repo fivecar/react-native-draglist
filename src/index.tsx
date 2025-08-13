@@ -140,6 +140,8 @@ function DragListImpl<T>(
   const dataRef = useRef(data);
   dataRef.current = data;
 
+  // In order to sync our animations with when the parent changes `data` on us, we render in
+  // "generations". Whenever the parent-provided data changes, we bump the generation.
   const lastDataRef = useRef(data);
   const dataGenRef = useRef(0);
 
@@ -638,7 +640,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
       style={style}
       onLayout={onCellLayout}
       ref={cellRef}
-      key={key + dataGen}
+      key={key}
     >
       {children}
     </Animated.View>

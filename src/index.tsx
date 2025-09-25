@@ -228,13 +228,32 @@ function DragListImpl<T>(
       }
 
       const posOrigin = props.horizontal ? gestate.x0 : gestate.y0;
-      const pos = props.horizontal ? gestate.dx : gestate.dy;
-      const wrapPos = posOrigin + pos - flatWrapLayout.current.pos;
+      let pos = props.horizontal ? gestate.dx : gestate.dy;
+      let wrapPos = posOrigin + pos - flatWrapLayout.current.pos;
+
+      const dragItemExtent = layouts[activeDataRef.current.key].extent;
+
+      if (props.scrollEnabled === false && flatWrapLayout.current.extent > 0) {
+        const halfExtent = dragItemExtent / 2;
+        const minWrapPos = halfExtent;
+        const maxWrapPos = Math.max(
+          minWrapPos,
+          flatWrapLayout.current.extent - halfExtent
+        );
+        const clampedWrapPos = Math.min(
+          Math.max(wrapPos, minWrapPos),
+          maxWrapPos
+        );
+
+        if (clampedWrapPos !== wrapPos) {
+          wrapPos = clampedWrapPos;
+          pos = clampedWrapPos - posOrigin + flatWrapLayout.current.pos;
+        }
+      }
 
       function updateRendering() {
-        const movedAmount = props.horizontal ? gestate.dx : gestate.dy;
         const panAmount =
-          scrollPos.current - grantScrollPosRef.current + movedAmount;
+          scrollPos.current - grantScrollPosRef.current + pos;
 
         setPan(panAmount);
 
@@ -264,7 +283,6 @@ function DragListImpl<T>(
         }
       }
 
-      const dragItemExtent = layouts[activeDataRef.current.key].extent;
       const leadingEdge = wrapPos - dragItemExtent / 2;
       const trailingEdge = wrapPos + dragItemExtent / 2;
       let offset = 0;
@@ -273,7 +291,9 @@ function DragListImpl<T>(
       // bottom edge (or right/left for horizontal ones). These calculations
       // can be a bit finnicky. You need to consider client coordinates and
       // coordinates relative to the screen.
-      if (leadingEdge < 0) {
+      if (props.scrollEnabled === false) {
+        offset = 0;
+      } else if (leadingEdge < 0) {
         offset = -dragItemExtent;
       } else if (trailingEdge > flatWrapLayout.current.extent) {
         offset = dragItemExtent;

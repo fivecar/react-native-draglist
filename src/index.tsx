@@ -233,12 +233,15 @@ function DragListImpl<T>(
 
       const dragItemExtent = layouts[activeDataRef.current.key].extent;
 
+      const pointerOffsetWithinItem =
+        dragItemExtent / 2 - grantActiveCenterOffsetRef.current;
+
       if (props.scrollEnabled === false && flatWrapLayout.current.extent > 0) {
-        const halfExtent = dragItemExtent / 2;
-        const minWrapPos = halfExtent;
+        const minWrapPos = pointerOffsetWithinItem;
         const maxWrapPos = Math.max(
           minWrapPos,
-          flatWrapLayout.current.extent - halfExtent
+          flatWrapLayout.current.extent -
+            (dragItemExtent - pointerOffsetWithinItem)
         );
         const clampedWrapPos = Math.min(
           Math.max(wrapPos, minWrapPos),

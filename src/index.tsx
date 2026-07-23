@@ -189,6 +189,17 @@ function DragListImpl<T>(
   const autoScrollTimerRef = useRef<ReturnType<typeof setInterval> | null>(
     null
   );
+  // Fallback teardown for reorders whose parent never hands back new data
+  // (see the grace-timer comment in onPanResponderRelease).
+  const graceResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const clearGraceResetTimer = useCallback(() => {
+    if (graceResetTimerRef.current) {
+      clearTimeout(graceResetTimerRef.current);
+      graceResetTimerRef.current = null;
+    }
+  }, []);
 
   // #78 - keep onHoverChanged up to date in our ref
   const hoverRef = useRef(props.onHoverChanged);
@@ -257,7 +268,16 @@ function DragListImpl<T>(
   );
 
   const shouldCapturePan = useCallback(() => {
-    return !!activeDataRef.current && !isReorderingRef.current;
+    // While a reorder's grace timer is pending, activeDataRef is still set
+    // (the drag posture is held for the parent's data change), but a stray
+    // touch must not be captured as a pan of the old item — releasing it
+    // could fire a second onReordered with stale indices. A deliberate new
+    // drag still works: the row's onDragStart disarms the timer first.
+    return (
+      !!activeDataRef.current &&
+      !isReorderingRef.current &&
+      !graceResetTimerRef.current
+    );
   }, []);
 
   const onPanResponderGrant = useCallback(
@@ -414,7 +434,12 @@ function DragListImpl<T>(
 
   const onPanResponderRelease = useCallback(
     async (_: GestureResponderEvent, _gestate: PanResponderGestureState) => {
-      const activeIndex = activeDataRef.current?.index;
+      // The drag this release belongs to. While onReordered awaits, presses
+      // still reach rows (only responder capture is blocked), so a new drag
+      // can supersede this one; teardown below must then stand down.
+      const releasedData = activeDataRef.current;
+      const activeIndex = releasedData?.index;
+      let reorderCallback: typeof reorderRef.current;
 
       clearAutoScrollTimer();
       fireOwedDragEnd();
@@ -437,7 +462,8 @@ function DragListImpl<T>(
           // stale).
           isReorderingRef.current = true;
 
-          await reorderRef.current?.(activeIndex, panIndex.current);
+          reorderCallback = reorderRef.current;
+          await reorderCallback?.(activeIndex, panIndex.current);
         } finally {
           isReorderingRef.current = false;
           // #76 - Normally we don't reset here; the parent's data change
@@ -446,17 +472,32 @@ function DragListImpl<T>(
           // parent never hands us new data (e.g. it mutated in place), we
           // must still tear the drag down or the list stays stuck.
           //
-          // This does not race the parent's commit. On React 18+, a setData
-          // called during onReordered is still pending when this microtask
-          // runs, so reset()'s setState batches with it into a single commit
-          // (new data + cleared drag state together). On React 17, setData
-          // flushed synchronously during onReordered, which already ran
-          // reset(false) via the data-change render, so activeDataRef is
-          // null here and we skip. Only parents that defer setData past the
-          // microtask queue (setTimeout etc.) see a reset against old data —
-          // a brief snap-back, which beats a permanently stuck drag.
-          if (activeDataRef.current) {
-            reset();
+          // We don't reset the moment onReordered resolves, though: parents
+          // backed by async/debounced stores hand back new data later than
+          // the microtask queue, and an eager reset would snap the item back
+          // and then jump it once the data arrived. Instead we arm a grace
+          // timer. In the normal case the data change lands first and the
+          // data-change render path resets atomically in the same commit as
+          // the move (clearing this timer via reset). Only if nothing
+          // arrives within the grace period does this fallback fire.
+          // Only tear down if this release still owns the drag state. If a
+          // drag started mid-await, arming the grace timer (or resetting)
+          // here would freeze and then kill that new drag; its own lifecycle
+          // handles teardown instead.
+          if (activeDataRef.current && activeDataRef.current === releasedData) {
+            if (!reorderCallback) {
+              // No onReordered callback means no parent can possibly echo
+              // new data — waiting would just hold the list unscrollable.
+              reset();
+            } else {
+              clearGraceResetTimer();
+              graceResetTimerRef.current = setTimeout(() => {
+                graceResetTimerRef.current = null;
+                if (activeDataRef.current) {
+                  reset();
+                }
+              }, REORDER_RESET_GRACE_MILLIS);
+            }
           }
         }
       } else {
@@ -503,6 +544,7 @@ function DragListImpl<T>(
    * When you don't want to trigger a re-render, pass false so we don't setExtra.
    */
   const reset = useCallback((shouldSetExtra = true) => {
+    clearGraceResetTimer();
     activeDataRef.current = null;
     panIndex.current = -1;
     hoverBus.index = -1;
@@ -539,6 +581,9 @@ function DragListImpl<T>(
   // function body_. That's right. Having it here changes timings or something in React Native so
   // our rendering is reset correctly, even if you do absolutely nothing in the function. As it
   // stands, we need to reset the pan, so it's all good.
+  // Disarm the grace fallback if we unmount while it's pending.
+  useEffect(() => clearGraceResetTimer, [clearGraceResetTimer]);
+
   useLayoutEffect(() => {
     setPan(0);
     // If a data change killed a live drag (reset(false) above), the host
@@ -553,6 +598,14 @@ function DragListImpl<T>(
   const startDrag = useCallback((index: number, key: string) => {
     // We don't allow dragging for lists less than 2 elements
     if (dataRef.current.length > 1) {
+      // If a reorder's grace timer is still pending (parent never echoed new
+      // data), starting a fresh drag supersedes it — the timer must not fire
+      // later and tear down the new drag. The previous drag's grant flag must
+      // also be cleared: reset() normally does that, but the grace window
+      // defers reset, and a stale true here would block endDrag's teardown if
+      // this new drag ends before being granted (press without movement).
+      clearGraceResetTimer();
+      panGrantedRef.current = false;
       // Zero pan synchronously before the activation render attaches it,
       // so the new active item can't inherit a stale offset from a
       // previous drag (setValue also pushes to the native side before the
@@ -677,6 +730,11 @@ function DragListImpl<T>(
 
 const SLIDE_MILLIS = 200;
 const AUTO_SCROLL_MILLIS = 200;
+// How long, after onReordered resolves, we wait for the parent's data change
+// (the atomic teardown path) before force-resetting the drag. Long enough for
+// async/debounced stores to round-trip; short enough that a parent that never
+// echoes data doesn't leave the list stuck with scrolling disabled.
+const REORDER_RESET_GRACE_MILLIS = 1500;
 const ANIM_VALUE_ZERO = new Animated.Value(0);
 const ANIM_VALUE_ONE = new Animated.Value(1);
 const ANIM_VALUE_NINER = new Animated.Value(999);

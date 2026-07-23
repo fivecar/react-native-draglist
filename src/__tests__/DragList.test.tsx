@@ -517,13 +517,15 @@ describe("memoized rows (perf: parent re-renders don't re-invoke renderItem)", (
   function makeElement(
     data: string[],
     renderItem: (info: DragListRenderItemInfo<string>) => React.ReactElement,
-    keyExtractor: (item: string, index: number) => string = item => item
+    keyExtractor: (item: string, index: number) => string = item => item,
+    extraData?: any
   ) {
     return (
       <DragList
         data={data}
         keyExtractor={keyExtractor}
         renderItem={renderItem}
+        extraData={extraData}
       />
     );
   }
@@ -595,6 +597,52 @@ describe("memoized rows (perf: parent re-renders don't re-invoke renderItem)", (
     });
 
     expect(calls["beta-revised"]).toBe(1);
+  });
+
+  it("re-invokes renderItem for all rows when the host's extraData changes", () => {
+    // FlatList's documented contract: hosts drive row updates from external
+    // state (selection etc.) by changing extraData with a stable renderItem.
+    // Memoization must not swallow those updates.
+    const calls: { [item: string]: number } = {};
+    const renderItem = countingRenderItem(calls);
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = TestRenderer.create(
+        makeElement(DATA, renderItem, undefined, 1)
+      );
+    });
+    renderers.push(renderer);
+    const callsBefore = { ...calls };
+
+    act(() => {
+      renderer.update(makeElement(DATA, renderItem, undefined, 2));
+    });
+
+    for (const item of DATA) {
+      expect(calls[item]).toBeGreaterThan(callsBefore[item]);
+    }
+  });
+
+  it("re-invokes renderItem for existing rows when the list length changes", () => {
+    // Parity with pre-memoization behavior, where renderDragItem depended on
+    // data.length: rows whose output reads list length through refs still get
+    // repainted when items are added or removed.
+    const calls: { [item: string]: number } = {};
+    const renderItem = countingRenderItem(calls);
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = TestRenderer.create(makeElement(DATA, renderItem));
+    });
+    renderers.push(renderer);
+    const callsBefore = { ...calls };
+
+    act(() => {
+      renderer.update(makeElement([...DATA, "delta"], renderItem));
+    });
+
+    for (const item of DATA) {
+      expect(calls[item]).toBeGreaterThan(callsBefore[item]);
+    }
   });
 
   it("still exposes working drag handles from memoized rows after a data change", async () => {

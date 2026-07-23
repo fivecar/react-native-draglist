@@ -95,6 +95,10 @@ type DragListItemProps<T> = {
   renderItem: (info: DragListRenderItemInfo<T>) => React.ReactElement | null;
   startDrag: (index: number, key: string) => void;
   endDrag: () => void;
+  // Not rendered directly — these exist so the memo comparator honors
+  // FlatList's extraData contract and pre-memoization length-dependence.
+  extraData: any;
+  numItems: number;
 };
 
 function DragListItemImpl<T>(props: DragListItemProps<T>) {
@@ -130,8 +134,12 @@ function DragListItemImpl<T>(props: DragListItemProps<T>) {
 // renderItem for rows whose inputs actually changed. The comparator must
 // include `renderItem` itself: a host whose renderItem closes over its own
 // state re-renders by passing a new closure, and skipping that would freeze
-// its rows. `separators` is deliberately excluded — VirtualizedList recreates
-// the info object per render, but each cell's separator callbacks are stable.
+// its rows. It must also include the host's `extraData` (FlatList's
+// documented escape hatch for rows driven by external state) and the item
+// count (pre-memoization, renderDragItem depended on data.length, so length
+// changes repainted every row). `separators` is deliberately excluded —
+// VirtualizedList recreates the info object per render, but each cell's
+// separator callbacks are stable.
 const DragListItem = React.memo(
   DragListItemImpl,
   (prev, next) =>
@@ -141,7 +149,9 @@ const DragListItem = React.memo(
     prev.isActive === next.isActive &&
     prev.renderItem === next.renderItem &&
     prev.startDrag === next.startDrag &&
-    prev.endDrag === next.endDrag
+    prev.endDrag === next.endDrag &&
+    prev.extraData === next.extraData &&
+    prev.numItems === next.numItems
 ) as unknown as typeof DragListItemImpl;
 
 function DragListImpl<T>(
@@ -587,10 +597,12 @@ function DragListImpl<T>(
           renderItem={renderItem}
           startDrag={startDrag}
           endDrag={endDrag}
+          extraData={props.extraData}
+          numItems={data.length}
         />
       );
     },
-    [renderItem]
+    [renderItem, props.extraData, data.length]
   );
 
   const onDragScroll = useCallback(

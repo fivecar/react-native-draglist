@@ -527,6 +527,54 @@ describe("atomic transform resets (bug: drop flashes at old position)", () => {
     expect(harness.flatList().props.scrollEnabled).toBe(true);
   });
 
+  it("does not tear down a drag that superseded the released one during an async onReordered", async () => {
+    // While onReordered is still awaiting, presses reach rows (only responder
+    // capture is blocked), so a user can start a new drag. The release's
+    // finally-block teardown must recognize it no longer owns the drag state
+    // and leave the superseding drag alone — neither arming a grace timer
+    // against it nor resetting it.
+    let resolveReorder!: () => void;
+    const harness = renderDragList({
+      onReordered: () =>
+        new Promise<void>(resolve => {
+          resolveReorder = resolve;
+        }),
+    });
+    await startGrantedDrag(harness);
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: 0, y0: ITEM_EXTENT / 2, dx: 0, dy: 120 } as any
+      );
+    });
+    await act(async () => {
+      harness.config.onPanResponderRelease?.(
+        {} as any,
+        { x0: 0, y0: ITEM_EXTENT / 2, dx: 0, dy: 120 } as any
+      );
+    });
+
+    // onReordered is still pending; the user starts a new drag.
+    await act(async () => {
+      harness.infos["gamma"].onDragStart();
+    });
+    await act(async () => {
+      resolveReorder();
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(3000);
+    });
+
+    expect(harness.infos["gamma"].isActive).toBe(true);
+    // The new drag must also be capturable (no pending grace timer blocking).
+    expect(
+      harness.config.onStartShouldSetPanResponderCapture?.(
+        {} as any,
+        { x0: 0, y0: 250, dx: 0, dy: 0 } as any
+      )
+    ).toBe(true);
+  });
+
   it("does not let a stale grace timer kill a subsequent drag", async () => {
     const harness = renderDragList({ onReordered: () => {} });
     await startGrantedDrag(harness);

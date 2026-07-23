@@ -434,7 +434,11 @@ function DragListImpl<T>(
 
   const onPanResponderRelease = useCallback(
     async (_: GestureResponderEvent, _gestate: PanResponderGestureState) => {
-      const activeIndex = activeDataRef.current?.index;
+      // The drag this release belongs to. While onReordered awaits, presses
+      // still reach rows (only responder capture is blocked), so a new drag
+      // can supersede this one; teardown below must then stand down.
+      const releasedData = activeDataRef.current;
+      const activeIndex = releasedData?.index;
       let reorderCallback: typeof reorderRef.current;
 
       clearAutoScrollTimer();
@@ -476,7 +480,11 @@ function DragListImpl<T>(
           // data-change render path resets atomically in the same commit as
           // the move (clearing this timer via reset). Only if nothing
           // arrives within the grace period does this fallback fire.
-          if (activeDataRef.current) {
+          // Only tear down if this release still owns the drag state. If a
+          // drag started mid-await, arming the grace timer (or resetting)
+          // here would freeze and then kill that new drag; its own lifecycle
+          // handles teardown instead.
+          if (activeDataRef.current && activeDataRef.current === releasedData) {
             if (!reorderCallback) {
               // No onReordered callback means no parent can possibly echo
               // new data — waiting would just hold the list unscrollable.

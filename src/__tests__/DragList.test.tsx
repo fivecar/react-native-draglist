@@ -15,6 +15,7 @@ interface Harness {
   renderer: ReactTestRenderer;
   config: Config;
   infos: { [key: string]: DragListRenderItemInfo<string> };
+  renderItemCalls: { count: number };
   update: (data: string[]) => void;
   layoutCells: () => void;
   layoutWrapper: () => void;
@@ -25,6 +26,7 @@ function renderDragList(props: {
   data?: string[];
   onDragBegin?: () => void;
   onDragEnd?: () => void;
+  onHoverChanged?: (hoverIndex: number) => void;
   onReordered?: (from: number, to: number) => Promise<void> | void;
 }): Harness {
   const realCreate = PanResponder.create.bind(PanResponder);
@@ -37,7 +39,9 @@ function renderDragList(props: {
     });
 
   const infos: { [key: string]: DragListRenderItemInfo<string> } = {};
+  const renderItemCalls = { count: 0 };
   const renderItem = (info: DragListRenderItemInfo<string>) => {
+    renderItemCalls.count++;
     infos[info.item] = info;
     return <Text>{info.item}</Text>;
   };
@@ -50,6 +54,7 @@ function renderDragList(props: {
         renderItem={renderItem}
         onDragBegin={props.onDragBegin}
         onDragEnd={props.onDragEnd}
+        onHoverChanged={props.onHoverChanged}
         onReordered={props.onReordered}
       />
     );
@@ -101,6 +106,7 @@ function renderDragList(props: {
     // captured during the initial render and never replaced.
     config: config!,
     infos,
+    renderItemCalls,
     update: (data: string[]) => {
       act(() => {
         renderer.update(element(data));
@@ -393,6 +399,115 @@ describe("atomic transform resets (bug: drop flashes at old position)", () => {
       Object.values(harness.infos).every(info => !info.isActive)
     ).toBe(true);
     expect(harness.flatList().props.scrollEnabled).toBe(true);
+  });
+});
+
+describe("hover changes don't re-render rows (perf)", () => {
+  // Returns the flattened transform of the composite Animated.View inside the
+  // cell that renders `item`, without resolving Animated nodes to numbers.
+  function cellTransform(harness: Harness, item: string): any {
+    const cells = harness.renderer.root.findAll(
+      node =>
+        typeof node.type === "function" &&
+        node.type.name === "CellRendererComponent"
+    );
+    const cell = cells.find(c => c.props.item === item)!;
+    const animatedView = cell.findAll(
+      (node: any) =>
+        typeof node.type !== "string" &&
+        node.props &&
+        typeof node.props.onLayout === "function" &&
+        node.props.style
+    )[0];
+    const flat = [animatedView.props.style]
+      .flat(Infinity)
+      .filter(Boolean)
+      .reduce((acc: any, s: any) => ({ ...acc, ...s }), {});
+    return flat.transform?.[0] ?? {};
+  }
+
+  it("does not re-invoke renderItem when the hover index changes mid-drag", async () => {
+    const harness = renderDragList({});
+    await startGrantedDrag(harness);
+
+    const callsBefore = harness.renderItemCalls.count;
+    // Drag item 0 down past the middle of item 1 (hover index 0 -> 1).
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: 0, y0: ITEM_EXTENT / 2, dx: 0, dy: 120 } as any
+      );
+    });
+
+    expect(harness.renderItemCalls.count).toBe(callsBefore);
+  });
+
+  it("still slides the displaced neighbor when the hover index changes", async () => {
+    const harness = renderDragList({});
+    await startGrantedDrag(harness);
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: 0, y0: ITEM_EXTENT / 2, dx: 0, dy: 120 } as any
+      );
+    });
+    // Let the 200ms slide animation finish.
+    await act(async () => {
+      jest.advanceTimersByTime(400);
+    });
+
+    const transform = cellTransform(harness, "beta");
+    const value = transform.translateY;
+    // Mid-drag, the neighbor's transform is a live Animated value; item 0
+    // moving down past beta means beta slides up by one item extent.
+    expect(value?.__getValue?.()).toBe(-ITEM_EXTENT);
+  });
+
+  it("still fires onHoverChanged with the new hover index", async () => {
+    const onHoverChanged = jest.fn();
+    const harness = renderDragList({ onHoverChanged });
+    await startGrantedDrag(harness);
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: 0, y0: ITEM_EXTENT / 2, dx: 0, dy: 120 } as any
+      );
+    });
+
+    expect(onHoverChanged).toHaveBeenCalledWith(1);
+  });
+
+  it("slides a neighbor back when the hover index moves away again", async () => {
+    const harness = renderDragList({});
+    await startGrantedDrag(harness);
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: 0, y0: ITEM_EXTENT / 2, dx: 0, dy: 120 } as any
+      );
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(400);
+    });
+    // Back to hovering over its own slot.
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: 0, y0: ITEM_EXTENT / 2, dx: 0, dy: 0 } as any
+      );
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(400);
+    });
+
+    const transform = cellTransform(harness, "beta");
+    const value = transform.translateY;
+    const resolved =
+      typeof value === "number" ? value : value?.__getValue?.();
+    expect(resolved).toBe(0);
   });
 });
 

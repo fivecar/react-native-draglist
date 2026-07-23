@@ -268,7 +268,16 @@ function DragListImpl<T>(
   );
 
   const shouldCapturePan = useCallback(() => {
-    return !!activeDataRef.current && !isReorderingRef.current;
+    // While a reorder's grace timer is pending, activeDataRef is still set
+    // (the drag posture is held for the parent's data change), but a stray
+    // touch must not be captured as a pan of the old item — releasing it
+    // could fire a second onReordered with stale indices. A deliberate new
+    // drag still works: the row's onDragStart disarms the timer first.
+    return (
+      !!activeDataRef.current &&
+      !isReorderingRef.current &&
+      !graceResetTimerRef.current
+    );
   }, []);
 
   const onPanResponderGrant = useCallback(
@@ -426,6 +435,7 @@ function DragListImpl<T>(
   const onPanResponderRelease = useCallback(
     async (_: GestureResponderEvent, _gestate: PanResponderGestureState) => {
       const activeIndex = activeDataRef.current?.index;
+      let reorderCallback: typeof reorderRef.current;
 
       clearAutoScrollTimer();
       fireOwedDragEnd();
@@ -448,7 +458,8 @@ function DragListImpl<T>(
           // stale).
           isReorderingRef.current = true;
 
-          await reorderRef.current?.(activeIndex, panIndex.current);
+          reorderCallback = reorderRef.current;
+          await reorderCallback?.(activeIndex, panIndex.current);
         } finally {
           isReorderingRef.current = false;
           // #76 - Normally we don't reset here; the parent's data change
@@ -466,13 +477,19 @@ function DragListImpl<T>(
           // the move (clearing this timer via reset). Only if nothing
           // arrives within the grace period does this fallback fire.
           if (activeDataRef.current) {
-            clearGraceResetTimer();
-            graceResetTimerRef.current = setTimeout(() => {
-              graceResetTimerRef.current = null;
-              if (activeDataRef.current) {
-                reset();
-              }
-            }, REORDER_RESET_GRACE_MILLIS);
+            if (!reorderCallback) {
+              // No onReordered callback means no parent can possibly echo
+              // new data — waiting would just hold the list unscrollable.
+              reset();
+            } else {
+              clearGraceResetTimer();
+              graceResetTimerRef.current = setTimeout(() => {
+                graceResetTimerRef.current = null;
+                if (activeDataRef.current) {
+                  reset();
+                }
+              }, REORDER_RESET_GRACE_MILLIS);
+            }
           }
         }
       } else {
@@ -575,8 +592,12 @@ function DragListImpl<T>(
     if (dataRef.current.length > 1) {
       // If a reorder's grace timer is still pending (parent never echoed new
       // data), starting a fresh drag supersedes it — the timer must not fire
-      // later and tear down the new drag.
+      // later and tear down the new drag. The previous drag's grant flag must
+      // also be cleared: reset() normally does that, but the grace window
+      // defers reset, and a stale true here would block endDrag's teardown if
+      // this new drag ends before being granted (press without movement).
       clearGraceResetTimer();
+      panGrantedRef.current = false;
       // Zero pan synchronously before the activation render attaches it,
       // so the new active item can't inherit a stale offset from a
       // previous drag (setValue also pushes to the native side before the

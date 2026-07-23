@@ -439,6 +439,94 @@ describe("atomic transform resets (bug: drop flashes at old position)", () => {
     ).toBe(true);
   });
 
+  it("resets immediately after a moved drop when no onReordered is provided", async () => {
+    // Without an onReordered callback, no parent can possibly echo new data,
+    // so the grace window would just hold the list unscrollable for nothing.
+    const harness = renderDragList({});
+    await startGrantedDrag(harness);
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: 0, y0: ITEM_EXTENT / 2, dx: 0, dy: 120 } as any
+      );
+    });
+    await act(async () => {
+      harness.config.onPanResponderRelease?.(
+        {} as any,
+        { x0: 0, y0: ITEM_EXTENT / 2, dx: 0, dy: 120 } as any
+      );
+    });
+
+    expect(
+      Object.values(harness.infos).every(info => !info.isActive)
+    ).toBe(true);
+    expect(harness.flatList().props.scrollEnabled).toBe(true);
+  });
+
+  it("does not capture the pan responder during the grace window", async () => {
+    // activeDataRef stays set while we wait for the parent's data, but a
+    // stray touch must not be captured as a pan of the old held item — that
+    // could fire a second onReordered with stale indices.
+    const harness = renderDragList({ onReordered: () => {} });
+    await startGrantedDrag(harness);
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: 0, y0: ITEM_EXTENT / 2, dx: 0, dy: 120 } as any
+      );
+    });
+    await act(async () => {
+      harness.config.onPanResponderRelease?.(
+        {} as any,
+        { x0: 0, y0: ITEM_EXTENT / 2, dx: 0, dy: 120 } as any
+      );
+    });
+    // Parent hasn't echoed data yet: grace window is open.
+
+    expect(
+      harness.config.onStartShouldSetPanResponderCapture?.(
+        {} as any,
+        { x0: 0, y0: 250, dx: 0, dy: 0 } as any
+      )
+    ).toBe(false);
+  });
+
+  it("recovers when a drag started during the grace window is released without movement", async () => {
+    // Starting a new drag disarms the grace fallback. If that drag then ends
+    // before the responder is granted (press without movement), the teardown
+    // must not be blocked by grant state left over from the previous drag.
+    const harness = renderDragList({ onReordered: () => {} });
+    await startGrantedDrag(harness);
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: 0, y0: ITEM_EXTENT / 2, dx: 0, dy: 120 } as any
+      );
+    });
+    await act(async () => {
+      harness.config.onPanResponderRelease?.(
+        {} as any,
+        { x0: 0, y0: ITEM_EXTENT / 2, dx: 0, dy: 120 } as any
+      );
+    });
+
+    // Press a row during the grace window, then release without moving.
+    await act(async () => {
+      harness.infos["gamma"].onDragStart();
+    });
+    await act(async () => {
+      harness.infos["gamma"].onDragEnd();
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(3000);
+    });
+
+    expect(
+      Object.values(harness.infos).every(info => !info.isActive)
+    ).toBe(true);
+    expect(harness.flatList().props.scrollEnabled).toBe(true);
+  });
+
   it("does not let a stale grace timer kill a subsequent drag", async () => {
     const harness = renderDragList({ onReordered: () => {} });
     await startGrantedDrag(harness);

@@ -25,6 +25,7 @@ import {
 } from "react-native";
 import {
   ActiveData,
+  createHoverBus,
   DragListProvider,
   LayoutCache,
   PosExtent,
@@ -61,11 +62,12 @@ export interface DragListRenderItemInfo<T> extends ListRenderItemInfo<T> {
   isActive: boolean;
 }
 
-// Used merely to trigger FlatList to re-render when necessary. Changing the
-// activeKey or the panIndex should both trigger re-render.
+// Used merely to trigger FlatList to re-render when necessary — only when a
+// drag starts or ends (attaching/detaching the Animated transform nodes).
+// Hover-index changes mid-drag deliberately do NOT re-render; they're
+// broadcast to cells through the hover bus instead.
 interface ExtraData {
   activeKey: string | null;
-  panIndex: number;
   // Used only to assure WDYR that we're intentionally re-rendering with a "different" object
   detritus?: string;
 }
@@ -105,9 +107,10 @@ function DragListImpl<T>(
   const isReorderingRef = useRef(false); // Whether we're actively rendering a reorder right now.
   // panIndex tracks the location where the dragged item would go if dropped
   const panIndex = useRef(-1);
+  // Broadcasts hover-index changes to mounted cells without re-rendering.
+  const hoverBus = useRef(createHoverBus()).current;
   const [extra, setExtra] = useState<ExtraData>({
     activeKey: activeDataRef.current?.key ?? null,
-    panIndex: -1,
   });
   const layouts = useRef<LayoutCache>({}).current;
   const panGrantedRef = useRef(false);
@@ -294,11 +297,14 @@ function DragListImpl<T>(
           curIndex++;
         }
 
-        // This simply exists to trigger a re-render.
+        // Broadcast the new hover index straight to the mounted cells (which
+        // start their own slide animations) instead of setState'ing the whole
+        // FlatList. Re-rendering every row via extraData on each hover change
+        // used to blow the frame budget by 2+ frames per change.
         if (panIndex.current != curIndex) {
-          setExtra({ ...extra, panIndex: curIndex });
-          hoverRef.current?.(curIndex);
           panIndex.current = curIndex;
+          hoverBus.notify(curIndex);
+          hoverRef.current?.(curIndex);
         }
       }
 
@@ -431,12 +437,12 @@ function DragListImpl<T>(
   const reset = useCallback((shouldSetExtra = true) => {
     activeDataRef.current = null;
     panIndex.current = -1;
+    hoverBus.index = -1;
     // setPan(0); Deliberately not handled here in render path, but in useLayoutEffect
     if (shouldSetExtra) {
       setExtra({
         // Trigger re-render
         activeKey: null,
-        panIndex: -1,
         detritus: Math.random().toString(),
       });
     }
@@ -488,7 +494,8 @@ function DragListImpl<T>(
           pan.setValue(0);
           activeDataRef.current = { index: info.index, key: key };
           panIndex.current = info.index;
-          setExtra({ activeKey: key, panIndex: info.index });
+          hoverBus.index = info.index;
+          setExtra({ activeKey: key });
         }
       };
       const onDragEnd = () => {
@@ -552,7 +559,7 @@ function DragListImpl<T>(
       activeData={activeDataRef.current}
       keyExtractor={keyExtractorRef.current}
       pan={pan}
-      panIndex={panIndex.current}
+      hoverBus={hoverBus}
       layouts={layouts}
       horizontal={props.horizontal}
     >
@@ -605,7 +612,7 @@ type CellRendererProps<T> = {
 
 function CellRendererComponent<T>(props: CellRendererProps<T>) {
   const { item, index, children, onLayout, ...rest } = props;
-  const { keyExtractor, activeData, pan, panIndex, layouts, horizontal } =
+  const { keyExtractor, activeData, pan, hoverBus, layouts, horizontal } =
     useDragListContext<T>();
   const cellRef = useRef<View>(null);
   const key = keyExtractor(item, index);
@@ -660,32 +667,58 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
     [onLayout, horizontal, key, layouts]
   );
 
-  // JS-driven on purpose — see the comment on `pan` in DragListImpl.
+  // Tracks the displacement this cell is currently animated toward, so
+  // hover-bus notifications that don't change our target are free.
+  const slideTargetRef = useRef(0);
+
+  // Slide displacement is driven by hover-bus notifications, not re-renders:
+  // DragList broadcasts each hover-index change and only cells whose
+  // displacement target actually changed start a new animation. The effect
+  // itself re-runs only when a drag starts/ends (activeData) or this cell's
+  // index changes. JS-driven on purpose — see the comment on `pan` in
+  // DragListImpl.
   useEffect(() => {
-    if (activeData != null) {
-      const activeKey = activeData.key;
-      const activeIndex = activeData.index;
+    if (activeData == null) {
+      slideTargetRef.current = 0;
+      anim.setValue(0);
+      return;
+    }
+
+    const activeKey = activeData.key;
+    const activeIndex = activeData.index;
+    const applySlide = (hoverIndex: number) => {
+      let target = 0;
 
       if (!isActive && layouts.hasOwnProperty(activeKey)) {
-        if (index >= panIndex && index <= activeIndex) {
-          return Animated.timing(anim, {
-            duration: SLIDE_MILLIS,
-            easing: Easing.inOut(Easing.linear),
-            toValue: layouts[activeKey].extent,
-            useNativeDriver: false,
-          }).start();
-        } else if (index >= activeIndex && index <= panIndex) {
-          return Animated.timing(anim, {
-            duration: SLIDE_MILLIS,
-            easing: Easing.inOut(Easing.linear),
-            toValue: -layouts[activeKey].extent,
-            useNativeDriver: false,
-          }).start();
+        if (index >= hoverIndex && index <= activeIndex) {
+          target = layouts[activeKey].extent;
+        } else if (index >= activeIndex && index <= hoverIndex) {
+          target = -layouts[activeKey].extent;
         }
       }
-    }
-    anim.setValue(0);
-  }, [index, panIndex, activeData]);
+      if (target === slideTargetRef.current) {
+        return;
+      }
+      slideTargetRef.current = target;
+      if (target === 0) {
+        // Matches the pre-bus behavior: leaving the displaced range snaps
+        // straight back rather than animating.
+        anim.setValue(0);
+      } else {
+        Animated.timing(anim, {
+          duration: SLIDE_MILLIS,
+          easing: Easing.inOut(Easing.linear),
+          toValue: target,
+          useNativeDriver: false,
+        }).start();
+      }
+    };
+
+    // Catch up immediately (cells can mount mid-drag during auto-scroll),
+    // then follow subsequent hover changes.
+    applySlide(hoverBus.index);
+    return hoverBus.subscribe(applySlide);
+  }, [index, isActive, activeData, hoverBus]);
 
   if (Platform.OS == "web") {
     // RN Web does not fire onLayout as expected

@@ -376,7 +376,7 @@ describe("atomic transform resets (bug: drop flashes at old position)", () => {
     }
   });
 
-  it("tears down the drag even when the parent never echoes new data after onReordered", async () => {
+  it("tears down the drag via the grace fallback when the parent never echoes new data after onReordered", async () => {
     const onDragEnd = jest.fn();
     const harness = renderDragList({ onDragEnd, onReordered: () => {} });
     await startGrantedDrag(harness);
@@ -392,13 +392,80 @@ describe("atomic transform resets (bug: drop flashes at old position)", () => {
         { x0: 0, y0: ITEM_EXTENT / 2, dx: 0, dy: 120 } as any
       );
     });
-    // Parent deliberately does NOT update data.
-
+    // Parent deliberately does NOT update data. onDragEnd is owed at release
+    // regardless, but the visual teardown waits for the grace period.
     expect(onDragEnd).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      jest.advanceTimersByTime(3000);
+    });
+
     expect(
       Object.values(harness.infos).every(info => !info.isActive)
     ).toBe(true);
     expect(harness.flatList().props.scrollEnabled).toBe(true);
+  });
+
+  it("holds the drag state after onReordered resolves instead of resetting before the parent's data arrives", async () => {
+    // Parents backed by async/debounced stores hand back new data later than
+    // the microtask queue. Resetting the moment onReordered resolves would
+    // snap the item back and then jump it once data arrives; instead the
+    // reset waits (within a grace period) for the data change, which tears
+    // down atomically in the same commit as the move.
+    const harness = renderDragList({ onReordered: () => {} });
+    await startGrantedDrag(harness);
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: 0, y0: ITEM_EXTENT / 2, dx: 0, dy: 120 } as any
+      );
+    });
+    await act(async () => {
+      harness.config.onPanResponderRelease?.(
+        {} as any,
+        { x0: 0, y0: ITEM_EXTENT / 2, dx: 0, dy: 120 } as any
+      );
+    });
+
+    // No data change and no grace expiry yet: the drag visuals must be held.
+    expect(
+      Object.values(harness.infos).some(info => info.isActive)
+    ).toBe(true);
+
+    // The (late) data change still resets atomically.
+    harness.update(["beta", "alpha", "gamma"]);
+    expect(
+      Object.values(harness.infos).every(info => !info.isActive)
+    ).toBe(true);
+  });
+
+  it("does not let a stale grace timer kill a subsequent drag", async () => {
+    const harness = renderDragList({ onReordered: () => {} });
+    await startGrantedDrag(harness);
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: 0, y0: ITEM_EXTENT / 2, dx: 0, dy: 120 } as any
+      );
+    });
+    await act(async () => {
+      harness.config.onPanResponderRelease?.(
+        {} as any,
+        { x0: 0, y0: ITEM_EXTENT / 2, dx: 0, dy: 120 } as any
+      );
+    });
+    // Parent echoes the reorder; the pending grace timer must be disarmed.
+    harness.update(["beta", "alpha", "gamma"]);
+
+    // Start a new drag, then let any stale timer fire.
+    await act(async () => {
+      harness.infos["gamma"].onDragStart();
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(3000);
+    });
+
+    expect(harness.infos["gamma"].isActive).toBe(true);
   });
 });
 

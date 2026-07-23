@@ -31,6 +31,7 @@ type ContextProps<T> = {
   horizontal: boolean | null | undefined;
   children: React.ReactNode;
   dataGen: number;
+  isPanGranted: boolean;
 };
 
 type DragListContextValue<T> = Omit<ContextProps<T>, "children">;
@@ -48,6 +49,7 @@ export function DragListProvider<T>({
   horizontal,
   children,
   dataGen,
+  isPanGranted,
 }: ContextProps<T>) {
   const value = useMemo(
     () => ({
@@ -58,8 +60,9 @@ export function DragListProvider<T>({
       layouts,
       horizontal,
       dataGen,
+      isPanGranted,
     }),
-    [activeData, keyExtractor, pan, panIndex, layouts, horizontal, dataGen]
+    [activeData, keyExtractor, pan, panIndex, layouts, horizontal, dataGen, isPanGranted]
   );
 
   return (

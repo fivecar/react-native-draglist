@@ -111,6 +111,7 @@ function DragListImpl<T>(
   });
   const layouts = useRef<LayoutCache>({}).current;
   const panGrantedRef = useRef(false);
+  const [isPanGranted, setIsPanGranted] = useState(false);
   const grantScrollPosRef = useRef(0); // Scroll pos when granted
   // The amount you need to add to the touched position to get to the active
   // item's center.
@@ -179,6 +180,7 @@ function DragListImpl<T>(
       grantScrollPosRef.current = scrollPos.current;
       setPan(0);
       panGrantedRef.current = true;
+      setIsPanGranted(true);
       flatWrapRefPosUpdatedRef.current = false;
       flatWrapRef.current?.measure((_x, _y, _width, _height, pageX, pageY) => {
         // Capture the latest y position upon starting a drag, because the
@@ -350,15 +352,15 @@ function DragListImpl<T>(
           await reorderRef.current?.(activeIndex, panIndex.current);
         } finally {
           isReorderingRef.current = false;
+          pan.setValue(0);
+          reset();
         }
       } else {
-        // #76 - Only reset here if we're not going to reorder the list. If we are instead
-        // reordering the list, we reset once the parent updates data. Otherwise things will jump
-        // around visually.
+        pan.setValue(0);
         reset();
       }
     },
-    []
+    [pan]
   );
 
   const panResponder = useRef(
@@ -383,29 +385,53 @@ function DragListImpl<T>(
   /**
    * When you don't want to trigger a re-render, pass false so we don't setExtra.
    */
-  const reset = useCallback((shouldSetExtra = true) => {
-    activeDataRef.current = null;
-    panIndex.current = -1;
-    // setPan(0); Deliberately not handled here in render path, but in useLayoutEffect
-    if (shouldSetExtra) {
-      setExtra({
-        // Trigger re-render
-        activeKey: null,
-        panIndex: -1,
-        detritus: Math.random().toString(),
-      });
-    }
-    panGrantedRef.current = false;
-    grantActiveCenterOffsetRef.current = 0;
-    clearAutoScrollTimer();
-  }, []);
+  const reset = useCallback(
+    (shouldSetExtra = true) => {
+      activeDataRef.current = null;
+      panIndex.current = -1;
+      // Synchronously zero pan so the next item that becomes isActive
+      // never inherits a leftover translate from the previous drag
+      // (the async setPan in useLayoutEffect is not fast enough when the
+      // user presses a new item right after a reorder completes).
+      pan.setValue(0);
+      if (shouldSetExtra) {
+        setExtra({
+          // Trigger re-render
+          activeKey: null,
+          panIndex: -1,
+          detritus: Math.random().toString(),
+        });
+      }
+      panGrantedRef.current = false;
+      setIsPanGranted(false);
+      grantActiveCenterOffsetRef.current = 0;
+      clearAutoScrollTimer();
+    },
+    [pan]
+  );
 
   // Whenever new content arrives, we bump the generation number so stale animations don't continue
   // to apply.
   if (lastDataRef.current !== data) {
+    const prev = lastDataRef.current;
+    const prevKeys =
+      prev && prev.length
+        ? new Set(prev.map((it, i) => keyExtractorRef.current(it, i)))
+        : new Set<string>();
+    const sameSize = prevKeys.size === data.length;
+    const reorderOnly =
+      sameSize &&
+      data.length > 0 &&
+      data.every((it, i) => prevKeys.has(keyExtractorRef.current(it, i)));
     lastDataRef.current = data;
-    dataGenRef.current++;
-    reset(false); // Don't trigger re-render because we're already rendering.
+    if (reorderOnly) {
+      if (activeDataRef.current != null) {
+        reset(true);
+      }
+    } else {
+      dataGenRef.current++;
+      reset(false); // Don't trigger re-render because we're already rendering.
+    }
   }
 
   // For reasons unclear to me, you need this useLayoutEffect here -- _even if you have an empty
@@ -421,11 +447,15 @@ function DragListImpl<T>(
       const key = keyExtractorRef.current(info.item, info.index);
       const isActive = key === activeDataRef.current?.key;
       const onDragStart = () => {
-        // We don't allow dragging for lists less than 2 elements
         if (data.length > 1) {
-          activeDataRef.current = { index: info.index, key: key };
-          panIndex.current = info.index;
-          setExtra({ activeKey: key, panIndex: info.index });
+          const resolvedIndex = dataRef.current.findIndex(
+            (it, i) => keyExtractorRef.current(it, i) === key
+          );
+          const index = resolvedIndex >= 0 ? resolvedIndex : info.index;
+          pan.setValue(0);
+          activeDataRef.current = { index, key };
+          panIndex.current = index;
+          setExtra({ activeKey: key, panIndex: index });
         }
       };
       const onDragEnd = () => {
@@ -453,7 +483,7 @@ function DragListImpl<T>(
         isActive,
       });
     },
-    [props.renderItem, data.length]
+    [props.renderItem, data.length, pan]
   );
 
   const onDragScroll = useCallback(
@@ -493,6 +523,7 @@ function DragListImpl<T>(
       layouts={layouts}
       horizontal={props.horizontal}
       dataGen={dataGenRef.current}
+      isPanGranted={isPanGranted}
     >
       <View
         ref={flatWrapRef}
@@ -551,6 +582,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
     layouts,
     horizontal,
     dataGen,
+    isPanGranted,
   } = useDragListContext<T>();
   const cellRef = useRef<View>(null);
   const key = keyExtractor(item, index);
@@ -593,7 +625,10 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
   );
 
   useEffect(() => {
-    if (activeData != null) {
+    if (activeData != null && !isPanGranted) {
+      return;
+    }
+    if (activeData != null && isPanGranted) {
       const activeKey = activeData.key;
       const activeIndex = activeData.index;
 
@@ -616,12 +651,12 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
       }
     }
     return Animated.timing(anim, {
-      duration: activeData?.key ? SLIDE_MILLIS : 0,
+      duration: activeData?.key && isPanGranted ? SLIDE_MILLIS : 0,
       easing: Easing.inOut(Easing.linear),
       toValue: 0,
       useNativeDriver: true,
     }).start();
-  }, [index, panIndex, activeData]);
+  }, [index, panIndex, activeData, isPanGranted]);
 
   // This resets our anim whenever a next generation of data arrives, so things are never translated
   // to non-zero positions by the time we render new content.

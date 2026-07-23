@@ -86,6 +86,74 @@ interface Props<T> extends Omit<FlatListProps<T>, "renderItem"> {
   CustomFlatList?: typeof FlatList;
 }
 
+type DragListItemProps<T> = {
+  item: T;
+  index: number;
+  itemKey: string;
+  isActive: boolean;
+  separators: ListRenderItemInfo<T>["separators"];
+  renderItem: (info: DragListRenderItemInfo<T>) => React.ReactElement | null;
+  startDrag: (index: number, key: string) => void;
+  endDrag: () => void;
+  // Not rendered directly — these exist so the memo comparator honors
+  // FlatList's extraData contract and pre-memoization length-dependence.
+  extraData: any;
+  numItems: number;
+};
+
+function DragListItemImpl<T>(props: DragListItemProps<T>) {
+  const {
+    item,
+    index,
+    itemKey,
+    isActive,
+    separators,
+    renderItem,
+    startDrag,
+    endDrag,
+  } = props;
+  const onDragStart = useCallback(
+    () => startDrag(index, itemKey),
+    [startDrag, index, itemKey]
+  );
+
+  return renderItem({
+    item,
+    index,
+    separators,
+    onDragStart,
+    onStartDrag: onDragStart,
+    onDragEnd: endDrag,
+    onEndDrag: endDrag,
+    isActive,
+  });
+}
+
+// Memoizes user row content so list-level re-renders (drag start/end, data
+// identity changes, FlatList virtualization churn) only re-invoke the host's
+// renderItem for rows whose inputs actually changed. The comparator must
+// include `renderItem` itself: a host whose renderItem closes over its own
+// state re-renders by passing a new closure, and skipping that would freeze
+// its rows. It must also include the host's `extraData` (FlatList's
+// documented escape hatch for rows driven by external state) and the item
+// count (pre-memoization, renderDragItem depended on data.length, so length
+// changes repainted every row). `separators` is deliberately excluded —
+// VirtualizedList recreates the info object per render, but each cell's
+// separator callbacks are stable.
+const DragListItem = React.memo(
+  DragListItemImpl,
+  (prev, next) =>
+    prev.item === next.item &&
+    prev.index === next.index &&
+    prev.itemKey === next.itemKey &&
+    prev.isActive === next.isActive &&
+    prev.renderItem === next.renderItem &&
+    prev.startDrag === next.startDrag &&
+    prev.endDrag === next.endDrag &&
+    prev.extraData === next.extraData &&
+    prev.numItems === next.numItems
+) as unknown as typeof DragListItemImpl;
+
 function DragListImpl<T>(
   props: Props<T>,
   ref?: React.ForwardedRef<FlatList<T> | null>
@@ -479,51 +547,62 @@ function DragListImpl<T>(
     fireOwedDragEnd();
   }, [data]);
 
+  // Stable identity so memoized rows can keep it forever; reads everything
+  // through refs, so a row that skipped re-rendering still starts drags
+  // against current state.
+  const startDrag = useCallback((index: number, key: string) => {
+    // We don't allow dragging for lists less than 2 elements
+    if (dataRef.current.length > 1) {
+      // Zero pan synchronously before the activation render attaches it,
+      // so the new active item can't inherit a stale offset from a
+      // previous drag (setValue also pushes to the native side before the
+      // attach command lands, since animated-module commands run in
+      // order).
+      pan.setValue(0);
+      activeDataRef.current = { index, key };
+      panIndex.current = index;
+      hoverBus.index = index;
+      setExtra({ activeKey: key });
+    }
+  }, []);
+
+  const endDrag = useCallback(() => {
+    // You can sometimes have started a drag and yet not captured the
+    // pan (because you don't capture the responder during onStart but
+    // do during onMove, and yet the user hasn't moved). In those cases,
+    // you need to reset everything so that items become !isActive.
+    // In cases where you DID capture the pan, this function is a no-op
+    // because we'll end the drag when it really ends (since we've
+    // captured it). This all is necessary because the way the user
+    // decided to call onStartDrag is likely in response to an onPressIn,
+    // which then triggers on onPressOut the moment we capture (thus
+    // leading to a premature call to onEndDrag here).
+    if (activeDataRef.current && !panGrantedRef.current) {
+      reset();
+    }
+  }, []);
+
   const renderDragItem = useCallback(
     (info: ListRenderItemInfo<T>) => {
       const key = keyExtractorRef.current(info.item, info.index);
       const isActive = key === activeDataRef.current?.key;
-      const onDragStart = () => {
-        // We don't allow dragging for lists less than 2 elements
-        if (data.length > 1) {
-          // Zero pan synchronously before the activation render attaches it,
-          // so the new active item can't inherit a stale offset from a
-          // previous drag (setValue also pushes to the native side before the
-          // attach command lands, since animated-module commands run in
-          // order).
-          pan.setValue(0);
-          activeDataRef.current = { index: info.index, key: key };
-          panIndex.current = info.index;
-          hoverBus.index = info.index;
-          setExtra({ activeKey: key });
-        }
-      };
-      const onDragEnd = () => {
-        // You can sometimes have started a drag and yet not captured the
-        // pan (because you don't capture the responder during onStart but
-        // do during onMove, and yet the user hasn't moved). In those cases,
-        // you need to reset everything so that items become !isActive.
-        // In cases where you DID capture the pan, this function is a no-op
-        // because we'll end the drag when it really ends (since we've
-        // captured it). This all is necessary because the way the user
-        // decided to call onStartDrag is likely in response to an onPressIn,
-        // which then triggers on onPressOut the moment we capture (thus
-        // leading to a premature call to onEndDrag here).
-        if (activeDataRef.current && !panGrantedRef.current) {
-          reset();
-        }
-      };
 
-      return props.renderItem({
-        ...info,
-        onDragStart,
-        onStartDrag: onDragStart,
-        onDragEnd,
-        onEndDrag: onDragEnd,
-        isActive,
-      });
+      return (
+        <DragListItem
+          item={info.item}
+          index={info.index}
+          itemKey={key}
+          isActive={isActive}
+          separators={info.separators}
+          renderItem={renderItem}
+          startDrag={startDrag}
+          endDrag={endDrag}
+          extraData={props.extraData}
+          numItems={data.length}
+        />
+      );
     },
-    [props.renderItem, data.length]
+    [renderItem, props.extraData, data.length]
   );
 
   const onDragScroll = useCallback(

@@ -371,6 +371,16 @@ function DragListImpl<T>(
           // moves items, which is what keeps the drop atomic. But if the
           // parent never hands us new data (e.g. it mutated in place), we
           // must still tear the drag down or the list stays stuck.
+          //
+          // This does not race the parent's commit. On React 18+, a setData
+          // called during onReordered is still pending when this microtask
+          // runs, so reset()'s setState batches with it into a single commit
+          // (new data + cleared drag state together). On React 17, setData
+          // flushed synchronously during onReordered, which already ran
+          // reset(false) via the data-change render, so activeDataRef is
+          // null here and we skip. Only parents that defer setData past the
+          // microtask queue (setTimeout etc.) see a reset against old data —
+          // a brief snap-back, which beats a permanently stuck drag.
           if (activeDataRef.current) {
             reset();
           }

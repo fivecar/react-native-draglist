@@ -126,24 +126,37 @@ function DragListImpl<T>(
   reorderRef.current = props.onReordered;
   const keyExtractorRef = useRef(keyExtractor);
   keyExtractorRef.current = keyExtractor;
+  const onDragBeginRef = useRef(onDragBegin);
+  onDragBeginRef.current = onDragBegin;
+  const onDragEndRef = useRef(onDragEnd);
+  onDragEndRef.current = onDragEnd;
 
-  // We force items to re-render when data changes. This is suboptimal, because most of the time
-  // when data changes we're just reordering things, which shouldn't need re-rendering their
-  // children. However, React Native reuses recycled native views if you keep keys the same, which
-  // makes the items jump around visually even if the code explicitly doesn't ask for it (because of
-  // lag between setting animation values and the JS bridge when you useNativeDriver). So we
-  // deliberately combine each item's key with the rendering generation number.
-  const generationKeyExtractor = useCallback((item: T, index: number) => {
-    return keyExtractorRef.current(item, index) + dataGenRef.current;
+  // Whether we still owe the host an onDragEnd for the current drag. Every
+  // teardown path (release, termination, mid-drag data change) must settle
+  // this debt so hosts can rely on onDragBegin/onDragEnd always pairing up.
+  const dragEndOwedRef = useRef(false);
+  const fireOwedDragEnd = useCallback(() => {
+    if (dragEndOwedRef.current) {
+      dragEndOwedRef.current = false;
+      onDragEndRef.current?.();
+    }
+  }, []);
+
+  // Keys must stay stable across data changes. We used to suffix keys with a
+  // data-generation number to force full remounts on every data change (to
+  // clear stale native transforms), but that broke
+  // maintainVisibleContentPosition on Fabric (the anchor child gets
+  // destroyed, so mVCP applies garbage offsets) and remounted every row on
+  // every data change. Stale transforms can't occur anymore because idle
+  // cells render static zero transforms (see CellRendererComponent).
+  const stableKeyExtractor = useCallback((item: T, index: number) => {
+    return keyExtractorRef.current(item, index);
   }, []);
 
   const dataRef = useRef(data);
   dataRef.current = data;
 
-  // In order to sync our animations with when the parent changes `data` on us, we render in
-  // "generations". Whenever the parent-provided data changes, we bump the generation.
   const lastDataRef = useRef(data);
-  const dataGenRef = useRef(0);
 
   const flatRef = useRef<FlatList<T> | null>(null);
   const flatWrapRef = useRef<View>(null);
@@ -154,18 +167,20 @@ function DragListImpl<T>(
   const flatWrapRefPosUpdatedRef = useRef(false);
   const scrollPos = useRef(0);
 
-  // pan is the drag dy
+  // pan is the drag dy.
+  //
+  // IMPORTANT: all Animated values in this library are JS-driven
+  // (useNativeDriver: false), deliberately. The native driver keeps values in
+  // a native-side overlay that is re-applied on top of every React commit and
+  // is NOT restored when nodes detach on Fabric. That overlay is what caused
+  // years of drop glitches: items flashing at their old position (#76, #107,
+  // #114), items turning invisible after a drag (#81, #95), and setValue
+  // silently not applying (#53). With JS-driven values, what we render is a
+  // pure function of JS state and commits atomically with layout changes.
   const pan = useRef(new Animated.Value(0)).current;
   const setPan = useCallback(
     (value: number) => {
-      // Starting RN 0.76.3, pan.setValue(whatever) no longer animates the isActive item. Dunno whether
-      // it's the useNativeDriver or what that gets this working again. So, lamely, we set the value
-      // using a zero-duration Animated.timing.
-      Animated.timing(pan, {
-        duration: 0,
-        toValue: value,
-        useNativeDriver: true,
-      }).start();
+      pan.setValue(value);
     },
     [pan]
   );
@@ -210,7 +225,8 @@ function DragListImpl<T>(
         flatWrapRefPosUpdatedRef.current = true;
       });
 
-      onDragBegin?.();
+      dragEndOwedRef.current = true;
+      onDragBeginRef.current?.();
     },
     []
   );
@@ -327,7 +343,7 @@ function DragListImpl<T>(
       const activeIndex = activeDataRef.current?.index;
 
       clearAutoScrollTimer();
-      onDragEnd?.();
+      fireOwedDragEnd();
 
       if (
         activeIndex != null && // Being paranoid, we exclude both undefined and null here
@@ -350,6 +366,24 @@ function DragListImpl<T>(
           await reorderRef.current?.(activeIndex, panIndex.current);
         } finally {
           isReorderingRef.current = false;
+          // #76 - Normally we don't reset here; the parent's data change
+          // (in response to onReordered) resets us in the same commit that
+          // moves items, which is what keeps the drop atomic. But if the
+          // parent never hands us new data (e.g. it mutated in place), we
+          // must still tear the drag down or the list stays stuck.
+          //
+          // This does not race the parent's commit. On React 18+, a setData
+          // called during onReordered is still pending when this microtask
+          // runs, so reset()'s setState batches with it into a single commit
+          // (new data + cleared drag state together). On React 17, setData
+          // flushed synchronously during onReordered, which already ran
+          // reset(false) via the data-change render, so activeDataRef is
+          // null here and we skip. Only parents that defer setData past the
+          // microtask queue (setTimeout etc.) see a reset against old data —
+          // a brief snap-back, which beats a permanently stuck drag.
+          if (activeDataRef.current) {
+            reset();
+          }
         }
       } else {
         // #76 - Only reset here if we're not going to reorder the list. If we are instead
@@ -370,6 +404,17 @@ function DragListImpl<T>(
       onPanResponderGrant,
       onPanResponderMove,
       onPanResponderRelease,
+      // If something politely asks to take the responder mid-drag (a JS-side
+      // steal), decline: the user is visibly dragging an item.
+      onPanResponderTerminationRequest: () => false,
+      // Native gestures (e.g. react-native-gesture-handler recognizers,
+      // iOS system gestures, incoming calls) can still forcibly terminate us
+      // without a termination request. Treat that like a release: the user's
+      // finger already did the reordering work, so we commit at the current
+      // hover index rather than snapping back — and, either way, we must tear
+      // the drag down (reset state, re-enable scrolling, fire onDragEnd) or
+      // the item is left floating forever.
+      onPanResponderTerminate: onPanResponderRelease,
     })
   ).current;
 
@@ -400,11 +445,19 @@ function DragListImpl<T>(
     clearAutoScrollTimer();
   }, []);
 
-  // Whenever new content arrives, we bump the generation number so stale animations don't continue
-  // to apply.
   if (lastDataRef.current !== data) {
     lastDataRef.current = data;
-    dataGenRef.current++;
+    // Prune layouts of keys that no longer exist. Entries are only refreshed
+    // by mounted cells' onLayout, so stale rects from removed items would
+    // otherwise corrupt the next drag's hover-index math.
+    const currentKeys = new Set(
+      data.map((item, index) => keyExtractorRef.current(item, index))
+    );
+    Object.keys(layouts).forEach(key => {
+      if (!currentKeys.has(key)) {
+        delete layouts[key];
+      }
+    });
     reset(false); // Don't trigger re-render because we're already rendering.
   }
 
@@ -414,6 +467,10 @@ function DragListImpl<T>(
   // stands, we need to reset the pan, so it's all good.
   useLayoutEffect(() => {
     setPan(0);
+    // If a data change killed a live drag (reset(false) above), the host
+    // still deserves its onDragEnd. This is a no-op when the drag already
+    // ended via release/termination.
+    fireOwedDragEnd();
   }, [data]);
 
   const renderDragItem = useCallback(
@@ -423,6 +480,12 @@ function DragListImpl<T>(
       const onDragStart = () => {
         // We don't allow dragging for lists less than 2 elements
         if (data.length > 1) {
+          // Zero pan synchronously before the activation render attaches it,
+          // so the new active item can't inherit a stale offset from a
+          // previous drag (setValue also pushes to the native side before the
+          // attach command lands, since animated-module commands run in
+          // order).
+          pan.setValue(0);
           activeDataRef.current = { index: info.index, key: key };
           panIndex.current = info.index;
           setExtra({ activeKey: key, panIndex: info.index });
@@ -492,7 +555,6 @@ function DragListImpl<T>(
       panIndex={panIndex.current}
       layouts={layouts}
       horizontal={props.horizontal}
-      dataGen={dataGenRef.current}
     >
       <View
         ref={flatWrapRef}
@@ -511,7 +573,7 @@ function DragListImpl<T>(
               }
             }
           }}
-          keyExtractor={generationKeyExtractor}
+          keyExtractor={stableKeyExtractor}
           data={data}
           renderItem={renderDragItem}
           CellRendererComponent={CellRendererComponent}
@@ -543,15 +605,8 @@ type CellRendererProps<T> = {
 
 function CellRendererComponent<T>(props: CellRendererProps<T>) {
   const { item, index, children, onLayout, ...rest } = props;
-  const {
-    keyExtractor,
-    activeData,
-    pan,
-    panIndex,
-    layouts,
-    horizontal,
-    dataGen,
-  } = useDragListContext<T>();
+  const { keyExtractor, activeData, pan, panIndex, layouts, horizontal } =
+    useDragListContext<T>();
   const cellRef = useRef<View>(null);
   const key = keyExtractor(item, index);
   const isActive = key === activeData?.key;
@@ -560,6 +615,13 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
   // Starting RN 0.76.3, we need to use Animated.Value instead of a plain number
   // for Animated.View's elevation and zIndex. I (fivecar) don't understand why.
   // If you use raw numbers, the elevation and zIndex don't have an effect.
+  // Transforms are only backed by Animated values while a drag is in
+  // progress. When idle, every cell renders a static zero transform, so the
+  // React commit that applies reordered data carries transform 0 atomically
+  // with the new layout. This is what prevents dropped items from flashing at
+  // their old position: async native-animated resets can never race the
+  // commit, because nodes only attach at value 0 and detach in a commit that
+  // already specifies 0.
   const style = useMemo(() => {
     return [
       props.style,
@@ -569,15 +631,21 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
             zIndex: ANIM_VALUE_NINER,
             transform: [horizontal ? { translateX: pan } : { translateY: pan }],
           }
-        : {
+        : activeData
+        ? {
             elevation: ANIM_VALUE_ZERO,
             zIndex: ANIM_VALUE_ZERO,
             transform: [
               horizontal ? { translateX: anim } : { translateY: anim },
             ],
+          }
+        : {
+            elevation: 0,
+            zIndex: 0,
+            transform: [horizontal ? { translateX: 0 } : { translateY: 0 }],
           },
     ];
-  }, [props.style, isActive, horizontal, pan, anim]);
+  }, [props.style, isActive, !!activeData, horizontal, pan, anim]);
   const onCellLayout = useCallback(
     (evt: LayoutChangeEvent) => {
       if (onLayout) {
@@ -592,6 +660,7 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
     [onLayout, horizontal, key, layouts]
   );
 
+  // JS-driven on purpose — see the comment on `pan` in DragListImpl.
   useEffect(() => {
     if (activeData != null) {
       const activeKey = activeData.key;
@@ -603,35 +672,20 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
             duration: SLIDE_MILLIS,
             easing: Easing.inOut(Easing.linear),
             toValue: layouts[activeKey].extent,
-            useNativeDriver: true,
+            useNativeDriver: false,
           }).start();
         } else if (index >= activeIndex && index <= panIndex) {
           return Animated.timing(anim, {
             duration: SLIDE_MILLIS,
             easing: Easing.inOut(Easing.linear),
             toValue: -layouts[activeKey].extent,
-            useNativeDriver: true,
+            useNativeDriver: false,
           }).start();
         }
       }
     }
-    return Animated.timing(anim, {
-      duration: activeData?.key ? SLIDE_MILLIS : 0,
-      easing: Easing.inOut(Easing.linear),
-      toValue: 0,
-      useNativeDriver: true,
-    }).start();
+    anim.setValue(0);
   }, [index, panIndex, activeData]);
-
-  // This resets our anim whenever a next generation of data arrives, so things are never translated
-  // to non-zero positions by the time we render new content.
-  useLayoutEffect(() => {
-    Animated.timing(anim, {
-      duration: 0,
-      toValue: 0,
-      useNativeDriver: true,
-    }).start();
-  }, [dataGen]); // Do not get rid of dataGen here - the whole point is to run when it changes.
 
   if (Platform.OS == "web") {
     // RN Web does not fire onLayout as expected

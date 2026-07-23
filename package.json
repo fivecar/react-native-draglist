@@ -7,7 +7,7 @@
   "source": "src/index.tsx",
   "types": "dist/index.d.ts",
   "scripts": {
-    "test": "echo \"YOLO! What could possibly go wrong? (On a serious note, please run both iOS and Android examples and drag things around).\" && exit 1",
+    "test": "jest",
     "build": "microbundle-crl --no-compress --format modern,cjs",
     "prepare": "npm run build",
     "release": "release-it"
@@ -35,13 +35,17 @@
     "url": "git+https://github.com/fivecar/react-native-draglist.git"
   },
   "devDependencies": {
+    "@react-native/babel-preset": "^0.76.3",
     "@release-it/conventional-changelog": "^5.1.1",
     "@tsconfig/react-native": "^2.0.3",
     "@types/jest": "^29.2.3",
     "@types/react": "^18.2.6",
+    "@types/react-test-renderer": "^18.3.1",
+    "jest": "^29.7.0",
     "microbundle-crl": "^0.13.11",
     "react": "^18.3.1",
     "react-native": "^0.76.3",
+    "react-test-renderer": "^18.3.1",
     "release-it": "^15.5.1"
   },
   "release-it": {

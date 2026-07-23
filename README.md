@@ -103,6 +103,7 @@ All `FlatList` properties are supported, with the following extensions/modificat
 - `async onReordered(fromIndex: number, toIndex: number)` is called once the user drops a dragged item in its new position. This is *not called* if the user drops the item back in the spot it started. `DragList` will await this function and not reset its UI until it completes, so you can make modifications to the underlying data before the list resets its state.
   - `fromIndex` will be between `[0, data.length)` (that is, any valid index from the items you gave it).
   - `toIndex` reflects the position to which the item should be moved in the pre-modified `data`. It will never equal `fromIndex`. So, for instance, if `toIndex` is `0`, you should make `data[fromIndex]` the first element of `data`. **Note**: if the user drags the item to the very end of the list, `toIndex` will equal `data.length` (i.e. it will reference an index that is one beyond the end of the list -- the range of values is `[0, data.length]`).
+- `onDragBegin()` / `onDragEnd()` (optional): called when a drag actually begins (i.e. once `DragList` captures the pan) and when it ends. These are guaranteed to pair up: every `onDragBegin` is eventually followed by exactly one `onDragEnd`, no matter how the drag ends — a normal release, the responder being forcibly terminated by another gesture system (see the caveat below), or the drag being killed because `data` changed mid-drag. You can safely use them to track "is the user dragging" state in your app.
 - `onHoverChanged(index: number)` (optional): called whenever an item being dragged changes its index in the list. Note this is only called when the item hasn't been dropped into its final (potentially new) index yet — it's called as the item hovers around various indices it could be dropped at.
 - `ref: React.RefObject<FlatList<T>>` (optional): You can optionally pass a ref, which DragList will tunnel through to the underlying FlatList (via `forwardRef`). This is useful, for instance, if you want to `scrollToIndex` yourself on the underlying list.
 - `CustomFlatList: typeof FlatList` (optional): You can pass any component that implements the same interface as `FlatList`. Note: the component needs to support all sorts of `FlatList` things (e.g. `ref`, `scrollToPos`, etc) — i.e. it needs to implement the whole `FlatList` interface, not be just a `React.ComponentType<FlatListProps<T>>`. 
@@ -129,6 +130,28 @@ This package makes no attempt to handle multi-column lists. I'm happy to look at
 such things, but I suspect most attempts will be fraught with issues because the UX for dragging in
 a multi-column list isn't immediately obvious, especially when the underlying `FlatList`
 implementation can't be controlled from the outside.
+
+## Can I wrap my rows in other gesture recognizers (Swipeable, etc.)?
+Yes, but understand what happens when the two gesture systems fight. `DragList` uses React Native's
+`PanResponder` (the JS responder system). Native gesture recognizers — such as
+`react-native-gesture-handler`'s `Swipeable`/`Pan`, iOS system gestures (e.g. edge swipes), or OS
+interruptions like incoming calls — do not participate in the JS responder negotiation and can
+forcibly *terminate* an in-progress drag without asking. For example, RNGH's `Swipeable` will steal
+the touch after roughly 10px of horizontal drift, even mid-drag.
+
+`DragList` handles this as follows:
+- While a drag is active, polite (JS-side) attempts to take the responder are declined, so the drag
+  survives them.
+- If the touch is forcibly stolen anyway, `DragList` treats it like a drop: it commits the reorder
+  at the item's current hover position (calling `onReordered` if the index changed), tears down the
+  drag, re-enables scrolling, and fires `onDragEnd`. We commit rather than snap back because the
+  user's finger already did the reordering work — a termination isn't an expression of intent to
+  cancel.
+
+To minimize accidental steals in the first place, start drags from a dedicated drag handle rather
+than the whole row, and/or disable your row's horizontal recognizers while a drag is active (e.g.
+set `enabled={false}` on `Swipeable` from your `onDragBegin`/`onDragEnd` handlers, or use RNGH's
+`activeOffsetX`/`failOffsetY` to make the swipe require more deliberate horizontal movement).
 
 ## Do you have caveats?
 This package is implemented with probably 1/10th the files, and 1/20th the advanced concepts, as `react-native-draggable-flatlist`. The latter even directly modifies unpublished internal data structures of `react-native-reanimated`, so it's all sorts of advanced in ways that this package will never be. You should prefer, and default to, using `react-native-draggable-flatlist` unless its random hangs and crashes bother you.

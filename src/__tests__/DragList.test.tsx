@@ -511,6 +511,106 @@ describe("hover changes don't re-render rows (perf)", () => {
   });
 });
 
+describe("memoized rows (perf: parent re-renders don't re-invoke renderItem)", () => {
+  // These tests render DragList directly (instead of via the harness) so we
+  // control the identity of `data` and `renderItem` across updates.
+  function makeElement(
+    data: string[],
+    renderItem: (info: DragListRenderItemInfo<string>) => React.ReactElement,
+    keyExtractor: (item: string, index: number) => string = item => item
+  ) {
+    return (
+      <DragList
+        data={data}
+        keyExtractor={keyExtractor}
+        renderItem={renderItem}
+      />
+    );
+  }
+
+  function countingRenderItem(calls: { [item: string]: number }) {
+    return (info: DragListRenderItemInfo<string>) => {
+      calls[info.item] = (calls[info.item] ?? 0) + 1;
+      return <Text>{info.item}</Text>;
+    };
+  }
+
+  it("does not re-invoke renderItem for unchanged items when data identity changes", () => {
+    const calls: { [item: string]: number } = {};
+    const renderItem = countingRenderItem(calls);
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = TestRenderer.create(makeElement(DATA, renderItem));
+    });
+    renderers.push(renderer);
+    const callsBefore = { ...calls };
+
+    // New array identity, same item identities: rows should not re-render.
+    act(() => {
+      renderer.update(makeElement([...DATA], renderItem));
+    });
+
+    expect(calls).toEqual(callsBefore);
+  });
+
+  it("re-invokes renderItem when the renderItem prop identity changes", () => {
+    const calls: { [item: string]: number } = {};
+    const renderItem = countingRenderItem(calls);
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = TestRenderer.create(makeElement(DATA, renderItem));
+    });
+    renderers.push(renderer);
+
+    // A parent passing a new renderItem closure (e.g. it re-rendered with new
+    // state the rows depend on) must always reach the rows.
+    const calls2: { [item: string]: number } = {};
+    const renderItem2 = countingRenderItem(calls2);
+    act(() => {
+      renderer.update(makeElement(DATA, renderItem2));
+    });
+
+    expect(Object.keys(calls2).sort()).toEqual([...DATA].sort());
+  });
+
+  it("re-invokes renderItem for an item whose identity changes", () => {
+    const calls: { [item: string]: number } = {};
+    const renderItem = countingRenderItem(calls);
+    let renderer!: ReactTestRenderer;
+    // Key by index so replacing an item keeps the same key (no remount) and
+    // memoization must detect the item identity change itself.
+    const keyByIndex = (_item: string, index: number) => String(index);
+    act(() => {
+      renderer = TestRenderer.create(
+        makeElement(DATA, renderItem, keyByIndex)
+      );
+    });
+    renderers.push(renderer);
+    delete calls["beta"];
+
+    act(() => {
+      renderer.update(
+        makeElement(["alpha", "beta-revised", "gamma"], renderItem, keyByIndex)
+      );
+    });
+
+    expect(calls["beta-revised"]).toBe(1);
+  });
+
+  it("still exposes working drag handles from memoized rows after a data change", async () => {
+    // Guards against memoized rows capturing stale onDragStart closures: after
+    // the parent swaps in a new data array (same items), starting a drag from
+    // a row that skipped re-rendering must still work.
+    const harness = renderDragList({});
+    harness.update([...DATA]);
+    await startGrantedDrag(harness);
+
+    expect(
+      Object.values(harness.infos).some(info => info.isActive)
+    ).toBe(true);
+  });
+});
+
 describe("key stability (bug: remounts break maintainVisibleContentPosition)", () => {
   it("keeps item keys stable across data changes", () => {
     const harness = renderDragList({});

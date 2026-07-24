@@ -301,6 +301,44 @@ describe("mid-drag data changes", () => {
     expect(onDragEnd).toHaveBeenCalledTimes(1);
   });
 
+  it("fires the owed onDragEnd when the list unmounts mid-drag", async () => {
+    // A parent may unmount the list while a drag is live (e.g. hiding it based
+    // on other state) before any release/terminate event or data change
+    // arrives. The onDragBegin/onDragEnd pairing guarantee must still hold, or
+    // hosts tracking isDragging via these callbacks get stuck.
+    const onDragBegin = jest.fn();
+    const onDragEnd = jest.fn();
+    const harness = renderDragList({ onDragBegin, onDragEnd });
+    await startGrantedDrag(harness);
+    expect(onDragBegin).toHaveBeenCalledTimes(1);
+    expect(onDragEnd).not.toHaveBeenCalled();
+
+    act(() => {
+      harness.renderer.unmount();
+    });
+
+    expect(onDragEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fire onDragEnd again on unmount after a drag already ended", async () => {
+    const onDragEnd = jest.fn();
+    const harness = renderDragList({ onDragEnd });
+    await startGrantedDrag(harness);
+    await act(async () => {
+      harness.config.onPanResponderRelease?.(
+        {} as any,
+        { x0: 0, y0: ITEM_EXTENT / 2, dx: 0, dy: 0 } as any
+      );
+    });
+    expect(onDragEnd).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      harness.renderer.unmount();
+    });
+
+    expect(onDragEnd).toHaveBeenCalledTimes(1);
+  });
+
   it("fires onDragEnd on release even when nothing was reordered", async () => {
     const onDragEnd = jest.fn();
     const harness = renderDragList({ onDragEnd });
@@ -602,6 +640,61 @@ describe("atomic transform resets (bug: drop flashes at old position)", () => {
     });
 
     expect(harness.infos["gamma"].isActive).toBe(true);
+  });
+});
+
+describe("idle stacking resets (bug: raw elevation/zIndex ignored on RN 0.76.3+)", () => {
+  // Returns the flattened {elevation, zIndex} of each cell's composite
+  // Animated.View, without resolving Animated nodes to numbers.
+  function cellStackingStyles(harness: Harness): Array<{ [k: string]: any }> {
+    const cells = harness.renderer.root.findAll(
+      node =>
+        typeof node.type === "function" &&
+        node.type.name === "CellRendererComponent"
+    );
+    return cells.map(cell => {
+      const animatedView = cell.findAll(
+        (node: any) =>
+          typeof node.type !== "string" &&
+          node.props &&
+          typeof node.props.onLayout === "function" &&
+          node.props.style
+      )[0];
+      const flat = [animatedView.props.style]
+        .flat(Infinity)
+        .filter(Boolean)
+        .reduce((acc: any, s: any) => ({ ...acc, ...s }), {});
+      return { elevation: flat.elevation, zIndex: flat.zIndex };
+    });
+  }
+
+  it("resets elevation and zIndex via Animated values in the commit that applies reordered data", async () => {
+    // On RN 0.76.3+, raw numbers for elevation/zIndex on an Animated.View
+    // don't take effect (see issue #53). After a dragged cell rendered with
+    // Animated ONE/999, returning to idle with raw zeros can leave stale
+    // native stacking, so the idle branch must keep these on Animated values.
+    const harness = renderDragList({ onReordered: () => {} });
+    await startGrantedDrag(harness);
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: 0, y0: ITEM_EXTENT / 2, dx: 0, dy: 120 } as any
+      );
+    });
+    await act(async () => {
+      harness.config.onPanResponderRelease?.(
+        {} as any,
+        { x0: 0, y0: ITEM_EXTENT / 2, dx: 0, dy: 120 } as any
+      );
+    });
+    harness.update(["beta", "alpha", "gamma"]);
+
+    for (const style of cellStackingStyles(harness)) {
+      expect(typeof style.elevation).not.toBe("number");
+      expect(style.elevation?.__getValue?.()).toBe(0);
+      expect(typeof style.zIndex).not.toBe("number");
+      expect(style.zIndex?.__getValue?.()).toBe(0);
+    }
   });
 });
 

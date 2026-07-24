@@ -581,8 +581,18 @@ function DragListImpl<T>(
   // function body_. That's right. Having it here changes timings or something in React Native so
   // our rendering is reset correctly, even if you do absolutely nothing in the function. As it
   // stands, we need to reset the pan, so it's all good.
-  // Disarm the grace fallback if we unmount while it's pending.
-  useEffect(() => clearGraceResetTimer, [clearGraceResetTimer]);
+  // Unmount cleanup: disarm the grace fallback if it's pending, and settle
+  // any owed onDragEnd. A parent can unmount the list mid-drag (e.g. hiding
+  // it based on other state) before any release/terminate event or data
+  // change runs the other teardown paths, and onDragBegin/onDragEnd must
+  // still pair up.
+  useEffect(
+    () => () => {
+      clearGraceResetTimer();
+      fireOwedDragEnd();
+    },
+    [clearGraceResetTimer, fireOwedDragEnd]
+  );
 
   useLayoutEffect(() => {
     setPan(0);
@@ -784,8 +794,13 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
             ],
           }
         : {
-            elevation: 0,
-            zIndex: 0,
+            // elevation/zIndex stay Animated-backed even when idle: per the
+            // RN 0.76.3+ quirk above, raw numbers here don't take effect, so
+            // a just-dropped cell could keep its dragged stacking. These are
+            // module-level constants that never animate, so the transform's
+            // static-commit guarantee is unaffected.
+            elevation: ANIM_VALUE_ZERO,
+            zIndex: ANIM_VALUE_ZERO,
             transform: [horizontal ? { translateX: 0 } : { translateY: 0 }],
           },
     ];

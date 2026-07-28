@@ -1378,6 +1378,67 @@ describe("mirrored layouts (bug: RTL horizontal drags are frozen)", () => {
     );
   });
 
+  it("does not spawn a second loop when a scroll report lands mid-frame", async () => {
+    // A tick nulls its frame handle at the top and reschedules at the bottom,
+    // so for the length of the tick the loop looks exactly like a pinned one.
+    // Anything reentrant reaching resumeAutoScrollIfPinned inside that window
+    // — a synchronous onScroll from a non-animated scrollToOffset, a host's
+    // onHoverChanged triggering a relayout — would schedule a duplicate loop
+    // alongside the one the tick is about to schedule, and each duplicate
+    // would go on to spawn its own.
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(0, CONTENT_LENGTH);
+    const scrollToOffset = spyOnScrollToOffset(harness);
+    const raf = global.requestAnimationFrame as unknown as jest.Mock;
+    // Report the scroll synchronously, from inside the command itself, and
+    // count any frame the report schedules. A report is not a reason to start
+    // a loop, so the answer has to be none.
+    let scheduledByReports = 0;
+    scrollToOffset.mockImplementation(({ offset }) => {
+      const before = raf.mock.calls.length;
+      harness.scroll(offset, CONTENT_LENGTH);
+      scheduledByReports += raf.mock.calls.length - before;
+    });
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
+      );
+    });
+    advanceFrames(4);
+
+    expect(scrollToOffset).toHaveBeenCalled();
+    expect(scheduledByReports).toBe(0);
+  });
+
+  it("treats elastic overscroll as out of bounds rather than a legal floor", async () => {
+    // A drag can start while the list is still rubber-banded past its start, so
+    // the reported offset is negative with no inset making it legal. Taking
+    // that as the floor would command offsets the platform clamps to zero while
+    // the loop believed they landed, drifting the row and the drop index by the
+    // whole overscroll distance.
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(-60, CONTENT_LENGTH);
+    const scrollToOffset = spyOnScrollToOffset(harness);
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
+      );
+    });
+    advanceFrames(1);
+
+    // Straight to the legal bound, rather than creeping through the bounce.
+    const [{ offset }] = scrollToOffset.mock.calls[0];
+    expect(offset).toBeCloseTo(0);
+  });
+
   it("tears the loop down when a host starts a new drag mid-scroll", async () => {
     // onDragStart is public API, so a host driving it from its own recognizer
     // can supersede a live drag without any release. A frame still in flight

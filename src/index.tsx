@@ -245,11 +245,13 @@ function DragListImpl<T>(
   // their arithmetic with them is exact — see CLAUDE.md.
   const autoScrollTrailingInsetRef = useRef(0);
   const autoScrollLeadingInsetRef = useRef(0);
-  // Floor of last resort for the loop's offset. The near bound is really
-  // -leadingInset (the renderers clamp to `fmin(-contentInset.top, 0)`), but
-  // an inset we haven't been told about yet reads as zero, and a list already
-  // resting inside one must not be clamped up out of it.
-  const autoScrollSeedFloorRef = useRef(0);
+  // Whether the loop stopped because it hit an end of the list rather than
+  // because the drag stopped needing it. Explicit rather than inferred from a
+  // null frame handle, because the handle is *also* null during a tick — it's
+  // cleared at the top and rescheduled at the bottom — so anything reentrant
+  // reaching resumeAutoScrollIfPinned in that window would schedule a second
+  // loop on top of the tick's own.
+  const autoScrollPinnedRef = useRef(false);
   const autoScrollTimeRef = useRef(0);
   const autoScrollMirroredRef = useRef(false);
   // Main-axis content length, used to clamp the loop at the end of the list.
@@ -428,20 +430,21 @@ function DragListImpl<T>(
     }
   }, []);
 
-  // The loop has three states, spelled by these two refs: idle (no velocity,
-  // no frame), running (both), and *pinned* against an end of the list (a
-  // velocity, but no frame). Pinning keeps the velocity precisely so a later
-  // change to the clamp can tell which way the drag still wants to go.
+  // The loop has three states: idle (no velocity), running, and *pinned*
+  // against an end of the list. Pinning keeps the velocity, so a later change
+  // to the clamp can tell which way the drag still wants to go.
   const stopAutoScroll = useCallback(() => {
     if (autoScrollFrameRef.current !== null) {
       cancelAnimationFrame(autoScrollFrameRef.current);
       autoScrollFrameRef.current = null;
     }
     autoScrollVelocityRef.current = 0;
+    autoScrollPinnedRef.current = false;
   }, []);
 
   const autoScrollFrame = useCallback(() => {
     autoScrollFrameRef.current = null;
+    autoScrollPinnedRef.current = false;
 
     if (!activeDataRef.current || autoScrollVelocityRef.current === 0) {
       return;
@@ -477,8 +480,11 @@ function DragListImpl<T>(
     // origin plus width — cancels the term and lands back on
     // `contentSize - viewport + trailingInset`. Mirroring a CGRect means
     // mirroring its corners, not its dimensions.
-    const leadingInset = Math.max(autoScrollLeadingInsetRef.current, 0);
-    const minOffset = Math.min(autoScrollSeedFloorRef.current, -leadingInset);
+    //
+    // Note this is the *inset*, not wherever the list happens to be resting.
+    // Elastic overscroll also parks a list at a negative offset, and honoring
+    // that would let the loop command offsets the platform clamps to zero.
+    const minOffset = -Math.max(autoScrollLeadingInsetRef.current, 0);
     const offset = Math.min(
       Math.max(
         autoScrollOffsetRef.current + (mirrored ? -travel : travel),
@@ -500,9 +506,8 @@ function DragListImpl<T>(
     if (applied === 0) {
       // Pinned against an end of the list. Nothing else moves the offset while
       // a drag is up, so stop scheduling frames and idle until a move event or
-      // a change in the clamp revives us. Returning without clearing the
-      // velocity is what leaves this distinguishable from being stopped: the
-      // frame ref was already nulled at the top of this callback.
+      // a change in the clamp revives us.
+      autoScrollPinnedRef.current = true;
       return;
     }
 
@@ -525,9 +530,11 @@ function DragListImpl<T>(
   const resumeAutoScrollIfPinned = useCallback(() => {
     if (
       activeDataRef.current &&
+      autoScrollPinnedRef.current &&
       autoScrollVelocityRef.current !== 0 &&
       autoScrollFrameRef.current === null
     ) {
+      autoScrollPinnedRef.current = false;
       autoScrollTimeRef.current = Date.now();
       autoScrollFrameRef.current = requestAnimationFrame(autoScrollFrame);
     }
@@ -568,14 +575,6 @@ function DragListImpl<T>(
           ? flowScrollPos.current
           : scrollPos.current;
         autoScrollScrollPosRef.current = scrollPos.current;
-        // A list resting inside a leading inset seeds negative, and that's a
-        // legal offset. Clamping such a drag to zero would snap it out of the
-        // inset on its very first frame — and since rendering now draws
-        // against this offset, the dragged item lurches along with it.
-        autoScrollSeedFloorRef.current = Math.min(
-          0,
-          autoScrollOffsetRef.current
-        );
       }
 
       if (autoScrollFrameRef.current === null) {

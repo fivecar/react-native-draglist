@@ -21,7 +21,22 @@ interface Harness {
   update: (data: string[]) => void;
   layoutCells: () => void;
   layoutWrapper: () => void;
-  scroll: (cartesianOffset: number, contentLength: number) => void;
+  scroll: (
+    cartesianOffset: number,
+    contentLength: number,
+    contentInset?: Partial<{
+      top: number;
+      bottom: number;
+      left: number;
+      right: number;
+    }>
+  ) => void;
+  // Reports a new main-axis content length, as a list without getItemLayout
+  // does when mounting rows revises its estimate.
+  growContent: (contentLength: number) => void;
+  // Shrinks the wrapper's main axis and re-fires its layout, as a split-view
+  // resize or a parent relayout does mid-drag.
+  shrinkWrapper: (extent: number) => void;
   flatList: () => ReturnType<ReactTestRenderer["root"]["findByType"]>;
 }
 
@@ -32,6 +47,7 @@ function renderDragList(props: {
   onDragEnd?: () => void;
   onHoverChanged?: (hoverIndex: number) => void;
   onReordered?: (from: number, to: number) => Promise<void> | void;
+  scrollEnabled?: boolean;
 }): Harness {
   const horizontal = !!props.horizontal;
   // Under RTL, Yoga mirrors a horizontal row, so index 0 lands at the far end
@@ -69,6 +85,7 @@ function renderDragList(props: {
         onDragEnd={props.onDragEnd}
         onHoverChanged={props.onHoverChanged}
         onReordered={props.onReordered}
+        scrollEnabled={props.scrollEnabled}
       />
     );
   }
@@ -116,12 +133,20 @@ function renderDragList(props: {
   // VirtualizedList's metrics aggregator refuses to resolve cell offsets
   // until it knows the content size, because under RTL it mirrors them
   // against the content length. Real lists always report this first.
-  function layoutContent() {
-    const scrollView = renderer.root.findAll(
+  function layoutContent(contentLength?: number) {
+    // DragList passes its own onContentSizeChange down (VirtualizedList
+    // chains it), so several nodes match. The innermost is the scroll view,
+    // and only its handler runs VirtualizedList's own bookkeeping.
+    const matches = renderer.root.findAll(
       node => typeof node.props?.onContentSizeChange === "function"
-    )[0];
+    );
+    const scrollView = matches[matches.length - 1];
+    const main = contentLength ?? (horizontal ? wrapRect.width : wrapRect.height);
     act(() => {
-      scrollView.props.onContentSizeChange(wrapRect.width, wrapRect.height);
+      scrollView.props.onContentSizeChange(
+        horizontal ? main : wrapRect.width,
+        horizontal ? wrapRect.height : main
+      );
     });
   }
 
@@ -185,7 +210,7 @@ function renderDragList(props: {
     },
     // Reports a scroll at `cartesianOffset` (what contentOffset carries: an
     // offset from the origin of the axis, regardless of layout direction).
-    scroll: (cartesianOffset: number, contentLength: number) => {
+    scroll: (cartesianOffset, contentLength, contentInset) => {
       act(() => {
         harness.flatList().props.onScroll({
           nativeEvent: {
@@ -196,9 +221,21 @@ function renderDragList(props: {
               ? { width: contentLength, height: LIST_BREADTH }
               : { width: LIST_BREADTH, height: contentLength },
             layoutMeasurement: wrapRect,
+            contentInset: { top: 0, bottom: 0, left: 0, right: 0, ...contentInset },
           },
         });
       });
+    },
+    growContent: contentLength => layoutContent(contentLength),
+    shrinkWrapper: extent => {
+      // The patched measure() reads wrapRect when called, so mutating it is
+      // enough for the re-fired layout to report the new extent.
+      if (horizontal) {
+        wrapRect.width = extent;
+      } else {
+        wrapRect.height = extent;
+      }
+      harness.layoutWrapper();
     },
     flatList: () => renderer.root.findByType(FlatList),
   };
@@ -226,6 +263,42 @@ async function startGrantedDrag(
 }
 
 const ORIGINAL_RTL = I18nManager.isRTL;
+
+// Auto-scroll runs on requestAnimationFrame, so tests drive it a frame at a
+// time. RN's jest setup routes rAF through a zero-delay setTimeout, which
+// under fake timers would re-enter forever inside a single advanceTimersByTime
+// (and never move the clock the loop integrates against).
+const frameQueue = new Map<number, FrameRequestCallback>();
+let nextFrameHandle = 1;
+
+function installFrameQueue() {
+  frameQueue.clear();
+  jest
+    .spyOn(global, "requestAnimationFrame")
+    .mockImplementation((callback: FrameRequestCallback) => {
+      const handle = nextFrameHandle++;
+      frameQueue.set(handle, callback);
+      return handle;
+    });
+  jest
+    .spyOn(global, "cancelAnimationFrame")
+    .mockImplementation((handle: number) => {
+      frameQueue.delete(handle);
+    });
+}
+
+// Advances the clock and runs whatever frames were pending when it started, so
+// a callback that schedules the next frame doesn't run within the same tick.
+function advanceFrames(count: number, millisPerFrame = 16) {
+  for (let i = 0; i < count; i++) {
+    const pending = [...frameQueue];
+    pending.forEach(([handle]) => frameQueue.delete(handle));
+    jest.advanceTimersByTime(millisPerFrame);
+    act(() => {
+      pending.forEach(([, callback]) => callback(Date.now()));
+    });
+  }
+}
 
 beforeEach(() => {
   // Fake timers keep the slide/pan Animated timers from firing after teardown.
@@ -968,8 +1041,9 @@ describe("mirrored layouts (bug: RTL horizontal drags are frozen)", () => {
       .mockImplementation(() => undefined);
   }
 
-  it("auto-scrolls a mirrored list by an offset measured from the start of the data", async () => {
+  it("auto-scrolls a mirrored list by offsets measured from the start of the data", async () => {
     (I18nManager as { isRTL: boolean }).isRTL = true;
+    installFrameQueue();
     const harness = renderDragList({ horizontal: true });
     await startGrantedDrag(harness, { x0: RTL_ITEM0_CENTER, y0: 0 });
     // Showing the very start of the data: under RTL that sits at the far end
@@ -986,17 +1060,18 @@ describe("mirrored layouts (bug: RTL horizontal drags are frozen)", () => {
         { x0: RTL_ITEM0_CENTER, y0: 0, dx: -RTL_ITEM0_CENTER, dy: 0 } as any
       );
     });
+    advanceFrames(1);
 
-    // One item further into the data. Passing the cartesian position here
-    // instead makes VirtualizedList mirror an already-mirrored number and
-    // fling the list most of its length.
-    expect(scrollToOffset).toHaveBeenCalledWith({
-      animated: true,
-      offset: ITEM_EXTENT,
-    });
+    // Further into the data, i.e. an ascending flow offset. Passing the
+    // cartesian position here instead makes VirtualizedList mirror an
+    // already-mirrored number and fling the list most of its length.
+    const [{ offset }] = scrollToOffset.mock.calls[0];
+    expect(offset).toBeGreaterThan(0);
+    expect(offset).toBeLessThan(ITEM_EXTENT);
   });
 
   it("auto-scrolls a non-mirrored list by its cartesian offset", async () => {
+    installFrameQueue();
     const harness = renderDragList({ horizontal: true });
     await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
     harness.scroll(LIST_EXTENT / 2, CONTENT_LENGTH);
@@ -1008,11 +1083,474 @@ describe("mirrored layouts (bug: RTL horizontal drags are frozen)", () => {
         { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
       );
     });
+    advanceFrames(1);
 
-    expect(scrollToOffset).toHaveBeenCalledWith({
-      animated: true,
-      offset: LIST_EXTENT / 2 + ITEM_EXTENT,
+    const [{ offset }] = scrollToOffset.mock.calls[0];
+    expect(offset).toBeGreaterThan(LIST_EXTENT / 2);
+    expect(offset).toBeLessThan(LIST_EXTENT / 2 + ITEM_EXTENT);
+  });
+
+  it("advances a few pixels per frame instead of a whole item per tick", async () => {
+    // The jump this replaced was one full item every 200ms, each an OS-
+    // animated scroll interrupted by the next. Smoothness is the point: no
+    // single frame may move the list anywhere near an item's worth.
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(0, CONTENT_LENGTH);
+    const scrollToOffset = spyOnScrollToOffset(harness);
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
+      );
     });
+    advanceFrames(5);
+
+    const offsets = scrollToOffset.mock.calls.map(([params]) => params.offset);
+    expect(offsets).toHaveLength(5);
+    // Strictly increasing, in steps well under an item.
+    offsets.forEach((offset, i) => {
+      const previous = i === 0 ? 0 : offsets[i - 1];
+      expect(offset).toBeGreaterThan(previous);
+      expect(offset - previous).toBeLessThan(ITEM_EXTENT / 2);
+    });
+    expect(scrollToOffset).not.toHaveBeenCalledWith(
+      expect.objectContaining({ animated: true })
+    );
+  });
+
+  it("stops the frame loop at the end of the content instead of spinning", async () => {
+    // Without the content-size clamp, the loop's own idea of the offset runs
+    // away past the end of the list and keeps commanding scrolls forever.
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    // Already scrolled to the last pixel of content.
+    harness.scroll(CONTENT_LENGTH - LIST_EXTENT, CONTENT_LENGTH);
+    const scrollToOffset = spyOnScrollToOffset(harness);
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
+      );
+    });
+    advanceFrames(5);
+
+    expect(scrollToOffset).not.toHaveBeenCalled();
+  });
+
+  it("tracks the hover index against the offset it commanded, not the last reported one", async () => {
+    // onScroll reports lag the loop by a frame or more and arrive unevenly, so
+    // drawing the drag against them jitters the dragged item and leaves the
+    // last command before an end-of-list pin undrawn — a release then reorders
+    // to a stale slot. Delivering no scroll reports at all makes the
+    // distinction visible: the hover index must still advance.
+    installFrameQueue();
+    const onHoverChanged = jest.fn();
+    // Enough items that the hover index has somewhere left to go once the
+    // drag is already held past the edge.
+    const harness = renderDragList({
+      horizontal: true,
+      data: ["alpha", ...Array.from({ length: 11 }, (_, i) => `item${i}`)],
+      onHoverChanged,
+    });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(0, CONTENT_LENGTH);
+    spyOnScrollToOffset(harness);
+
+    // Hold past the trailing edge. This alone puts the hover index partway
+    // along; everything past that has to come from auto-scroll.
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
+      );
+    });
+    const hoverBeforeScrolling = onHoverChanged.mock.calls.at(-1)?.[0];
+    advanceFrames(20);
+
+    expect(onHoverChanged.mock.calls.at(-1)?.[0]).toBeGreaterThan(
+      hoverBeforeScrolling
+    );
+  });
+
+  it("keeps the commanded offset across a loop restart mid-drag", async () => {
+    // Dipping back inside the list stops the loop, and crossing the edge again
+    // restarts it. Reseeding from scrollPos there would command a position the
+    // list has already scrolled past, jerking the drag backwards.
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(0, CONTENT_LENGTH);
+    const scrollToOffset = spyOnScrollToOffset(harness);
+
+    const pastEdge = { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 };
+    const insideList = { x0: LTR_ITEM0_CENTER, y0: 0, dx: 0, dy: 0 };
+    await act(async () => {
+      harness.config.onPanResponderMove?.({} as any, pastEdge as any);
+    });
+    advanceFrames(3);
+    const beforeRestart = scrollToOffset.mock.calls.at(-1)![0].offset;
+
+    // Back inside (loop stops), then past the edge again, without ever letting
+    // an onScroll report land.
+    await act(async () => {
+      harness.config.onPanResponderMove?.({} as any, insideList as any);
+    });
+    await act(async () => {
+      harness.config.onPanResponderMove?.({} as any, pastEdge as any);
+    });
+    advanceFrames(1);
+
+    expect(scrollToOffset.mock.calls.at(-1)![0].offset).toBeGreaterThan(
+      beforeRestart
+    );
+  });
+
+  it("scrolls into a trailing content inset instead of pinning an inset early", async () => {
+    // iOS lists with a trailing inset (an overlaid bar, an adjusted safe area)
+    // can legally scroll past contentSize - viewport. Clamping without it
+    // strands the last rows under whatever the inset was reserved for. Pairs
+    // with the no-inset case above, which must still pin here.
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(CONTENT_LENGTH - LIST_EXTENT, CONTENT_LENGTH, { right: 120 });
+    const scrollToOffset = spyOnScrollToOffset(harness);
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
+      );
+    });
+    advanceFrames(1);
+
+    const [{ offset }] = scrollToOffset.mock.calls[0];
+    expect(offset).toBeGreaterThan(CONTENT_LENGTH - LIST_EXTENT);
+  });
+
+  it("stays inside a leading content inset instead of snapping out of it", async () => {
+    // A list resting inside a *leading* inset reports a negative offset, and
+    // that's legal — iOS clamps to fmin(-contentInset.left, 0), not to 0. A
+    // lower bound of 0 would command the list out of the inset on the drag's
+    // very first frame, and since rendering draws against the commanded
+    // offset, the dragged item lurches the width of the inset with it.
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(-100, CONTENT_LENGTH, { left: 100 });
+    const scrollToOffset = spyOnScrollToOffset(harness);
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
+      );
+    });
+    advanceFrames(1);
+
+    const [{ offset }] = scrollToOffset.mock.calls[0];
+    expect(offset).toBeLessThan(0);
+    expect(offset).toBeGreaterThan(-100);
+  });
+
+  it("scrolls into a leading content inset it didn't start inside", async () => {
+    // The renderers clamp to fmin(-contentInset.left, 0), so a leading inset
+    // is reachable even from a list resting at zero. Flooring at zero instead
+    // strands the *first* rows under the overlay — the mirror image of the
+    // trailing-inset case.
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(0, CONTENT_LENGTH, { left: 100 });
+    const scrollToOffset = spyOnScrollToOffset(harness);
+
+    // Drag off the near edge, which scrolls back toward the start of the data.
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: -LIST_EXTENT, dy: 0 } as any
+      );
+    });
+    advanceFrames(1);
+
+    const [{ offset }] = scrollToOffset.mock.calls[0];
+    expect(offset).toBeLessThan(0);
+  });
+
+  it("does not treat a leading inset as slack at the far end", async () => {
+    // The renderers' maxRect adds fmax(leadingInset, 0) to its *width*, which
+    // reads like far-end slack but only cancels the rect's -leadingInset
+    // origin: CGRectGetMaxX lands back on contentSize - viewport +
+    // trailingInset. Counting it would command past the platform's real
+    // maximum, and the loop would go on believing offsets the native view
+    // silently capped — the one error direction this clamp can't absorb.
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(CONTENT_LENGTH - LIST_EXTENT, CONTENT_LENGTH, { left: 100 });
+    const scrollToOffset = spyOnScrollToOffset(harness);
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
+      );
+    });
+    advanceFrames(5);
+
+    expect(scrollToOffset).not.toHaveBeenCalled();
+  });
+
+  it("resumes when measured content grows past the bound it pinned against", async () => {
+    // A list without getItemLayout revises its content size as rows mount,
+    // which can push the far bound out from under a loop that already pinned
+    // against the old estimate. A finger held past the edge produces no move
+    // event, so the drag would stall short of the real end of the list.
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    // Content barely longer than the viewport, so the loop pins almost at once.
+    harness.scroll(0, LIST_EXTENT + 20);
+    const scrollToOffset = spyOnScrollToOffset(harness);
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
+      );
+    });
+    advanceFrames(10);
+
+    const pinnedAt = scrollToOffset.mock.calls.at(-1)![0].offset;
+    expect(pinnedAt).toBeCloseTo(20);
+
+    // Confirm it really stopped scheduling frames rather than spinning.
+    scrollToOffset.mockClear();
+    advanceFrames(5);
+    expect(scrollToOffset).not.toHaveBeenCalled();
+
+    // More rows mount and the estimate grows, with no move event to follow.
+    harness.growContent(LIST_EXTENT + 400);
+    advanceFrames(5);
+
+    expect(scrollToOffset.mock.calls.at(-1)?.[0].offset).toBeGreaterThan(
+      pinnedAt
+    );
+  });
+
+  it("resumes when a shrinking viewport gives the clamp more room", async () => {
+    // The viewport feeds the far bound too, so a wrapper that shrinks mid-drag
+    // (split-view resize, a parent relayout) makes more content reachable. Only
+    // onScroll and onContentSizeChange used to revive a pinned loop, leaving a
+    // stationary finger stuck at the bound computed for the old viewport.
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(0, LIST_EXTENT + 20);
+    const scrollToOffset = spyOnScrollToOffset(harness);
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
+      );
+    });
+    advanceFrames(10);
+
+    const pinnedAt = scrollToOffset.mock.calls.at(-1)![0].offset;
+    expect(pinnedAt).toBeCloseTo(20);
+    scrollToOffset.mockClear();
+    advanceFrames(5);
+    expect(scrollToOffset).not.toHaveBeenCalled();
+
+    // 200px narrower viewport means 200px more content to cover, with no move
+    // event to restart anything.
+    harness.shrinkWrapper(LIST_EXTENT - 200);
+    advanceFrames(5);
+
+    expect(scrollToOffset.mock.calls.at(-1)?.[0].offset).toBeGreaterThan(
+      pinnedAt
+    );
+  });
+
+  it("does not spawn a second loop when a scroll report lands mid-frame", async () => {
+    // A tick nulls its frame handle at the top and reschedules at the bottom,
+    // so for the length of the tick the loop looks exactly like a pinned one.
+    // Anything reentrant reaching resumeAutoScrollIfPinned inside that window
+    // — a synchronous onScroll from a non-animated scrollToOffset, a host's
+    // onHoverChanged triggering a relayout — would schedule a duplicate loop
+    // alongside the one the tick is about to schedule, and each duplicate
+    // would go on to spawn its own.
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(0, CONTENT_LENGTH);
+    const scrollToOffset = spyOnScrollToOffset(harness);
+    const raf = global.requestAnimationFrame as unknown as jest.Mock;
+    // Report the scroll synchronously, from inside the command itself, and
+    // count any frame the report schedules. A report is not a reason to start
+    // a loop, so the answer has to be none.
+    let scheduledByReports = 0;
+    scrollToOffset.mockImplementation(({ offset }) => {
+      const before = raf.mock.calls.length;
+      harness.scroll(offset, CONTENT_LENGTH);
+      scheduledByReports += raf.mock.calls.length - before;
+    });
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
+      );
+    });
+    advanceFrames(4);
+
+    expect(scrollToOffset).toHaveBeenCalled();
+    expect(scheduledByReports).toBe(0);
+  });
+
+  it("treats elastic overscroll as out of bounds rather than a legal floor", async () => {
+    // A drag can start while the list is still rubber-banded past its start, so
+    // the reported offset is negative with no inset making it legal. Taking
+    // that as the floor would command offsets the platform clamps to zero while
+    // the loop believed they landed, drifting the row and the drop index by the
+    // whole overscroll distance.
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(-60, CONTENT_LENGTH);
+    const scrollToOffset = spyOnScrollToOffset(harness);
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
+      );
+    });
+    advanceFrames(1);
+
+    // Straight to the legal bound, rather than creeping through the bounce.
+    const [{ offset }] = scrollToOffset.mock.calls[0];
+    expect(offset).toBeCloseTo(0);
+  });
+
+  it("tears the loop down when a host starts a new drag mid-scroll", async () => {
+    // onDragStart is public API, so a host driving it from its own recognizer
+    // can supersede a live drag without any release. A frame still in flight
+    // would then repaint the new active item against the old drag's geometry.
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(0, CONTENT_LENGTH);
+    const scrollToOffset = spyOnScrollToOffset(harness);
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
+      );
+    });
+    advanceFrames(3);
+    expect(scrollToOffset).toHaveBeenCalled();
+    scrollToOffset.mockClear();
+
+    await act(async () => {
+      harness.infos["gamma"].onDragStart();
+    });
+    advanceFrames(5);
+
+    expect(scrollToOffset).not.toHaveBeenCalled();
+  });
+
+  it("does not inherit the commanded offset when a new drag supersedes a reorder", async () => {
+    // A drag started while a reorder is still awaiting (or inside its grace
+    // window) never went through reset, so the previous drag's auto-scroll
+    // offsets are still around. Reading them against a grantScrollPosRef this
+    // drag captured from scrollPos would displace the new item the moment you
+    // moved it.
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true, onReordered: () => {} });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(0, CONTENT_LENGTH);
+    spyOnScrollToOffset(harness);
+
+    // Auto-scroll a good distance, never delivering a scroll report, so the
+    // loop's offset ends up well ahead of what onScroll last said.
+    const pastEdge = { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 };
+    await act(async () => {
+      harness.config.onPanResponderMove?.({} as any, pastEdge as any);
+    });
+    advanceFrames(10);
+    await act(async () => {
+      harness.config.onPanResponderRelease?.({} as any, pastEdge as any);
+    });
+
+    // The parent never echoes data, so the grace window holds the drag state.
+    // Grab a different row mid-window and move it without any displacement.
+    const gammaCenter = 2 * ITEM_EXTENT + ITEM_EXTENT / 2;
+    await act(async () => {
+      harness.infos["gamma"].onDragStart();
+    });
+    await act(async () => {
+      harness.config.onPanResponderGrant?.(
+        {} as any,
+        { x0: gammaCenter, y0: 0, dx: 0, dy: 0 } as any
+      );
+    });
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: gammaCenter, y0: 0, dx: 0, dy: 0 } as any
+      );
+    });
+
+    expect(cellTransform(harness, "gamma").translateX?.__getValue?.()).toBe(0);
+  });
+
+  it("disables native scrolling mid-drag even when the host asked for it", async () => {
+    // The auto-scroll loop's offset is only authoritative because nothing else
+    // moves the list while a drag is live. scrollEnabled used to sit before the
+    // {...rest} spread, so a host passing scrollEnabled={true} silently kept
+    // native scrolling on and could move the list out from under the loop with
+    // a second finger.
+    const harness = renderDragList({ scrollEnabled: true });
+    expect(harness.flatList().props.scrollEnabled).toBe(true);
+
+    await startGrantedDrag(harness);
+
+    expect(harness.flatList().props.scrollEnabled).toBe(false);
+  });
+
+  it("stops auto-scrolling once the drag is released", async () => {
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(0, CONTENT_LENGTH);
+    const scrollToOffset = spyOnScrollToOffset(harness);
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
+      );
+    });
+    advanceFrames(2);
+    const callsBefore = scrollToOffset.mock.calls.length;
+
+    await act(async () => {
+      harness.config.onPanResponderRelease?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
+      );
+    });
+    advanceFrames(5);
+
+    expect(scrollToOffset.mock.calls.length).toBe(callsBefore);
   });
 
   it("still tracks the hover index in a non-mirrored horizontal drag", async () => {

@@ -192,6 +192,10 @@ function DragListImpl<T>(
     onDragEnd,
     onScroll,
     onLayout,
+    // Pulled out of `rest` deliberately. We need this to size the auto-scroll
+    // clamp, and `rest` is spread last onto the list, so a host that passes
+    // its own would otherwise silently replace ours instead of chaining.
+    onContentSizeChange,
     renderItem,
     CustomFlatList = FlatList,
     ...rest
@@ -212,9 +216,54 @@ function DragListImpl<T>(
   // The amount you need to add to the touched position to get to the active
   // item's center.
   const grantActiveCenterOffsetRef = useRef(0);
-  const autoScrollTimerRef = useRef<ReturnType<typeof setInterval> | null>(
-    null
-  );
+  // Auto-scroll state. Dragging past an edge runs a frame loop that nudges
+  // the list a few pixels at a time; stepping a whole item per timer tick
+  // (what this used to do) reads as a series of jumps.
+  const autoScrollFrameRef = useRef<number | null>(null);
+  // Signed cartesian speed, in pixels per second, at which the content should
+  // slide under the viewport. Zero means we aren't auto-scrolling.
+  const autoScrollVelocityRef = useRef(0);
+  // The offset the loop last handed scrollToOffset, i.e. its own idea of
+  // where the list is. It has to be integrated here rather than read back
+  // from scrollPos every frame: onScroll lands a frame or more late, so
+  // re-reading it would keep re-applying travel the list already made.
+  const autoScrollOffsetRef = useRef(0);
+  // The same position in cartesian space, kept in lockstep with the above so
+  // the drag can be drawn against what we commanded instead of what onScroll
+  // last reported. See effectiveScrollPos.
+  const autoScrollScrollPosRef = useRef(0);
+  // Whether the loop's offsets have been seeded during the current drag. They
+  // survive the loop stopping and restarting (which happens every time your
+  // finger dips back inside the list), because reseeding from the lagging
+  // scrollPos would command a position the list has already passed and jerk
+  // the drag backwards. Every drag starts unseeded, though — see startDrag.
+  const autoScrollSeededRef = useRef(false);
+  // Main-axis content insets, which extend how far the list can legally
+  // scroll past its content at each end. iOS reports real values here
+  // (overlaid bars, adjusted safe areas); Android always reports zero. The
+  // renderers clamp our commands against exactly these values, so mirroring
+  // their arithmetic with them is exact — see CLAUDE.md.
+  const autoScrollTrailingInsetRef = useRef(0);
+  const autoScrollLeadingInsetRef = useRef(0);
+  // Whether the loop stopped because it hit an end of the list rather than
+  // because the drag stopped needing it. Explicit rather than inferred from a
+  // null frame handle, because the handle is *also* null during a tick — it's
+  // cleared at the top and rescheduled at the bottom — so anything reentrant
+  // reaching resumeAutoScrollIfPinned in that window would schedule a second
+  // loop on top of the tick's own.
+  const autoScrollPinnedRef = useRef(false);
+  const autoScrollTimeRef = useRef(0);
+  const autoScrollMirroredRef = useRef(false);
+  // Main-axis content length, used to clamp the loop at the end of the list.
+  // Zero means nobody has told us yet.
+  const contentExtentRef = useRef(0);
+  // The pan geometry from the last move event, so the frame loop can redo the
+  // drag's rendering as content slides beneath a stationary finger.
+  const moveGeometryRef = useRef<{
+    pos: number;
+    wrapPos: number;
+    mirrored: boolean;
+  } | null>(null);
   // Fallback teardown for reorders whose parent never hands back new data
   // (see the grace-timer comment in onPanResponderRelease).
   const graceResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -313,6 +362,229 @@ function DragListImpl<T>(
     );
   }, []);
 
+  // The scroll position the drag should be drawn against. Once auto-scroll has
+  // run during this drag, that's the offset we commanded rather than the one
+  // onScroll last reported: reports lag a frame or more and arrive unevenly,
+  // so drawing against them jitters the dragged item against smoothly moving
+  // content, and the loop's last command before it pins at an end would never
+  // be drawn at all — leaving a release to reorder to a stale slot. Nothing
+  // else moves the list mid-drag (scrolling is disabled), so the commanded
+  // value stays authoritative even while the loop is stopped.
+  const effectiveScrollPos = useCallback(
+    () =>
+      autoScrollSeededRef.current
+        ? autoScrollScrollPosRef.current
+        : scrollPos.current,
+    []
+  );
+
+  // Repaints the drag against the current scroll position: where the dragged
+  // item sits, and which slot it would drop into. It reads the last move's
+  // geometry from a ref rather than taking arguments, so the auto-scroll loop
+  // can replay it frame by frame while the finger holds still.
+  const updateRendering = useCallback(() => {
+    const geometry = moveGeometryRef.current;
+
+    if (!geometry) {
+      return;
+    }
+
+    const { pos, wrapPos, mirrored } = geometry;
+    const scrolled = effectiveScrollPos();
+    const panAmount = scrolled - grantScrollPosRef.current + pos;
+
+    setPan(panAmount);
+
+    // Now we figure out what your panIndex should be based on everyone's
+    // heights, starting from the first element. Note that we can't do this
+    // math if any element up to your drag point hasn't been measured yet. I
+    // don't think that should ever happen, but take note.
+    //
+    // The walk runs in flow order, which is coordinate order only when the
+    // layout isn't mirrored. Negating both sides under a mirrored layout
+    // keeps the comparison (and hence the loop) pointing the same way as the
+    // data.
+    const clientPos = wrapPos + scrolled;
+    const dragCenter = clientPos + grantActiveCenterOffsetRef.current;
+    const flowDragCenter = mirrored ? -dragCenter : dragCenter;
+    let curIndex = 0;
+    let key;
+    while (
+      curIndex < dataRef.current.length &&
+      layouts.hasOwnProperty(
+        (key = keyExtractorRef.current(dataRef.current[curIndex], curIndex))
+      ) &&
+      flowTrailingEdge(layouts[key], mirrored) < flowDragCenter
+    ) {
+      curIndex++;
+    }
+
+    // Broadcast the new hover index straight to the mounted cells (which
+    // start their own slide animations) instead of setState'ing the whole
+    // FlatList. Re-rendering every row via extraData on each hover change
+    // used to blow the frame budget by 2+ frames per change.
+    if (panIndex.current != curIndex) {
+      panIndex.current = curIndex;
+      hoverBus.notify(curIndex);
+      hoverRef.current?.(curIndex);
+    }
+  }, []);
+
+  // The loop has three states: idle (no velocity), running, and *pinned*
+  // against an end of the list. Pinning keeps the velocity, so a later change
+  // to the clamp can tell which way the drag still wants to go.
+  const stopAutoScroll = useCallback(() => {
+    if (autoScrollFrameRef.current !== null) {
+      cancelAnimationFrame(autoScrollFrameRef.current);
+      autoScrollFrameRef.current = null;
+    }
+    autoScrollVelocityRef.current = 0;
+    autoScrollPinnedRef.current = false;
+  }, []);
+
+  const autoScrollFrame = useCallback(() => {
+    autoScrollFrameRef.current = null;
+    autoScrollPinnedRef.current = false;
+
+    if (!activeDataRef.current || autoScrollVelocityRef.current === 0) {
+      return;
+    }
+
+    const now = Date.now();
+    // A frame that lands after a stall (blocked JS thread, backgrounded app)
+    // reports a huge elapsed time; integrating it would teleport the list.
+    const elapsed = Math.min(
+      now - autoScrollTimeRef.current,
+      AUTO_SCROLL_MAX_FRAME_MILLIS
+    );
+    autoScrollTimeRef.current = now;
+
+    if (elapsed <= 0) {
+      // Two frames inside the same millisecond. Nothing to integrate, and
+      // falling through would look like being pinned against an end.
+      autoScrollFrameRef.current = requestAnimationFrame(autoScrollFrame);
+      return;
+    }
+
+    // Velocity is cartesian — which way the content slides under the
+    // viewport — while scrollToOffset works in flow space, measured from the
+    // start of the data. A mirrored layout runs the two against each other,
+    // so the nudge flips sign. Feeding it the cartesian value instead makes
+    // VirtualizedList mirror an already-mirrored number and fling the list
+    // most of its length.
+    const mirrored = autoScrollMirroredRef.current;
+    const travel = (autoScrollVelocityRef.current * elapsed) / 1000;
+    // A leading inset moves the near bound only. The renderers' `maxRect` adds
+    // `fmax(leadingInset, 0)` to its *width*, which reads like far-end slack
+    // but isn't: the rect's origin is `-leadingInset`, so `CGRectGetMaxX` —
+    // origin plus width — cancels the term and lands back on
+    // `contentSize - viewport + trailingInset`. Mirroring a CGRect means
+    // mirroring its corners, not its dimensions.
+    //
+    // Note this is the *inset*, not wherever the list happens to be resting.
+    // Elastic overscroll also parks a list at a negative offset, and honoring
+    // that would let the loop command offsets the platform clamps to zero.
+    const minOffset = -Math.max(autoScrollLeadingInsetRef.current, 0);
+    const offset = Math.min(
+      Math.max(
+        autoScrollOffsetRef.current + (mirrored ? -travel : travel),
+        minOffset
+      ),
+      // Unknown content size leaves the far end unbounded, which just defers
+      // to the platform's own clamp.
+      contentExtentRef.current
+        ? Math.max(
+            minOffset,
+            contentExtentRef.current -
+              flatWrapLayout.current.extent +
+              autoScrollTrailingInsetRef.current
+          )
+        : Number.POSITIVE_INFINITY
+    );
+    const applied = offset - autoScrollOffsetRef.current;
+
+    if (applied === 0) {
+      // Pinned against an end of the list. Nothing else moves the offset while
+      // a drag is up, so stop scheduling frames and idle until a move event or
+      // a change in the clamp revives us.
+      autoScrollPinnedRef.current = true;
+      return;
+    }
+
+    autoScrollOffsetRef.current = offset;
+    // The clamp above is in flow space, so the cartesian twin has to follow
+    // the travel that actually got applied rather than what we asked for.
+    autoScrollScrollPosRef.current += mirrored ? -applied : applied;
+    flatRef.current?.scrollToOffset({ animated: false, offset });
+    updateRendering();
+    autoScrollFrameRef.current = requestAnimationFrame(autoScrollFrame);
+  }, []);
+
+  // Revives a pinned loop after something that feeds the clamp moves. A list
+  // without `getItemLayout` revises its content size as rows mount, which can
+  // push the far bound out from under a loop that already pinned against the
+  // old estimate — and a finger held still past the edge produces no move
+  // event to restart it, so the drag would otherwise stall short of the real
+  // end of the list. Resuming while still pinned costs one frame that computes
+  // zero travel and returns, so this can't spin.
+  const resumeAutoScrollIfPinned = useCallback(() => {
+    if (
+      activeDataRef.current &&
+      autoScrollPinnedRef.current &&
+      autoScrollVelocityRef.current !== 0 &&
+      autoScrollFrameRef.current === null
+    ) {
+      autoScrollPinnedRef.current = false;
+      autoScrollTimeRef.current = Date.now();
+      autoScrollFrameRef.current = requestAnimationFrame(autoScrollFrame);
+    }
+  }, []);
+
+  // Points the auto-scroll loop at a new speed, starting it if it isn't
+  // already running. `overshoot` is how far the dragged item pokes past the
+  // viewport edge, signed the way the content has to slide to follow it.
+  const setAutoScrollVelocity = useCallback(
+    (overshoot: number, dragItemExtent: number, mirrored: boolean) => {
+      if (overshoot === 0) {
+        stopAutoScroll();
+        return;
+      }
+
+      // Speed ramps with how far past the edge you are, so grazing the edge
+      // creeps while shoving well past it races. The ramp spans one item,
+      // bounded so that neither tiny rows nor full-screen ones distort it.
+      const ramp = Math.min(
+        Math.max(dragItemExtent, AUTO_SCROLL_MIN_RAMP_PIXELS),
+        AUTO_SCROLL_MAX_RAMP_PIXELS
+      );
+      const intensity = Math.min(Math.abs(overshoot) / ramp, 1);
+
+      autoScrollVelocityRef.current =
+        Math.sign(overshoot) *
+        (AUTO_SCROLL_MIN_PIXELS_PER_SEC +
+          (AUTO_SCROLL_MAX_PIXELS_PER_SEC - AUTO_SCROLL_MIN_PIXELS_PER_SEC) *
+            intensity);
+
+      // Seed once per drag, from the last position the list actually
+      // reported. Reseeding on each restart would hand back the lag we
+      // integrate our own offset to avoid.
+      if (!autoScrollSeededRef.current) {
+        autoScrollSeededRef.current = true;
+        autoScrollMirroredRef.current = mirrored;
+        autoScrollOffsetRef.current = mirrored
+          ? flowScrollPos.current
+          : scrollPos.current;
+        autoScrollScrollPosRef.current = scrollPos.current;
+      }
+
+      if (autoScrollFrameRef.current === null) {
+        autoScrollTimeRef.current = Date.now();
+        autoScrollFrameRef.current = requestAnimationFrame(autoScrollFrame);
+      }
+    },
+    []
+  );
+
   const onPanResponderGrant = useCallback(
     (_: GestureResponderEvent, gestate: PanResponderGestureState) => {
       grantScrollPosRef.current = scrollPos.current;
@@ -357,8 +629,6 @@ function DragListImpl<T>(
 
   const onPanResponderMove = useCallback(
     (_: GestureResponderEvent, gestate: PanResponderGestureState) => {
-      clearAutoScrollTimer();
-
       if (
         !flatWrapRefPosUpdatedRef.current ||
         !activeDataRef.current ||
@@ -395,89 +665,25 @@ function DragListImpl<T>(
         }
       }
 
-      function updateRendering() {
-        const panAmount =
-          scrollPos.current - grantScrollPosRef.current + pos;
-
-        setPan(panAmount);
-
-        // Now we figure out what your panIndex should be based on everyone's
-        // heights, starting from the first element. Note that we can't do
-        // this math if any element up to your drag point hasn't been measured
-        // yet. I don't think that should ever happen, but take note.
-        //
-        // The walk runs in flow order, which is coordinate order only when
-        // the layout isn't mirrored. Negating both sides under a mirrored
-        // layout keeps the comparison (and hence the loop) pointing the same
-        // way as the data.
-        const clientPos = wrapPos + scrollPos.current;
-        const dragCenter = clientPos + grantActiveCenterOffsetRef.current;
-        const flowDragCenter = mirrored ? -dragCenter : dragCenter;
-        let curIndex = 0;
-        let key;
-        while (
-          curIndex < dataRef.current.length &&
-          layouts.hasOwnProperty(
-            (key = keyExtractorRef.current(dataRef.current[curIndex], curIndex))
-          ) &&
-          flowTrailingEdge(layouts[key], mirrored) < flowDragCenter
-        ) {
-          curIndex++;
-        }
-
-        // Broadcast the new hover index straight to the mounted cells (which
-        // start their own slide animations) instead of setState'ing the whole
-        // FlatList. Re-rendering every row via extraData on each hover change
-        // used to blow the frame budget by 2+ frames per change.
-        if (panIndex.current != curIndex) {
-          panIndex.current = curIndex;
-          hoverBus.notify(curIndex);
-          hoverRef.current?.(curIndex);
-        }
-      }
-
       const leadingEdge = wrapPos - dragItemExtent / 2;
       const trailingEdge = wrapPos + dragItemExtent / 2;
-      let offset = 0;
+      let overshoot = 0;
 
-      // We auto-scroll the FlatList a bit when you drag off the top or
-      // bottom edge (or right/left for horizontal ones). These calculations
-      // can be a bit finnicky. You need to consider client coordinates and
-      // coordinates relative to the screen.
+      // We auto-scroll the FlatList when you drag off the top or bottom edge
+      // (or right/left for horizontal ones). These calculations can be a bit
+      // finnicky. You need to consider client coordinates and coordinates
+      // relative to the screen.
       if (props.scrollEnabled === false) {
-        offset = 0;
+        overshoot = 0;
       } else if (leadingEdge < 0) {
-        offset = -dragItemExtent;
+        overshoot = leadingEdge;
       } else if (trailingEdge > flatWrapLayout.current.extent) {
-        offset = dragItemExtent;
+        overshoot = trailingEdge - flatWrapLayout.current.extent;
       }
 
-      if (offset !== 0) {
-        function scrollOnce(distance: number) {
-          // `distance` is a cartesian nudge — which way the content should
-          // slide under the viewport. scrollToOffset, though, takes an offset
-          // measured from the start of the data, so under a mirrored layout
-          // both the origin and the sign of the nudge have to be converted.
-          // Feeding it the cartesian position instead makes it convert a
-          // second time, which throws the list most of its length away.
-          const target = mirrored
-            ? flowScrollPos.current - distance
-            : scrollPos.current + distance;
-
-          flatRef.current?.scrollToOffset({
-            animated: true,
-            offset: Math.max(0, target),
-          });
-          updateRendering();
-        }
-
-        scrollOnce(offset);
-        autoScrollTimerRef.current = setInterval(() => {
-          scrollOnce(offset);
-        }, AUTO_SCROLL_MILLIS);
-      } else {
-        updateRendering();
-      }
+      moveGeometryRef.current = { pos, wrapPos, mirrored };
+      setAutoScrollVelocity(overshoot, dragItemExtent, mirrored);
+      updateRendering();
     },
     []
   );
@@ -491,7 +697,7 @@ function DragListImpl<T>(
       const activeIndex = releasedData?.index;
       let reorderCallback: typeof reorderRef.current;
 
-      clearAutoScrollTimer();
+      stopAutoScroll();
       fireOwedDragEnd();
 
       if (
@@ -583,13 +789,6 @@ function DragListImpl<T>(
     })
   ).current;
 
-  const clearAutoScrollTimer = useCallback(() => {
-    if (autoScrollTimerRef.current) {
-      clearInterval(autoScrollTimerRef.current);
-      autoScrollTimerRef.current = null;
-    }
-  }, []);
-
   /**
    * When you don't want to trigger a re-render, pass false so we don't setExtra.
    */
@@ -608,7 +807,9 @@ function DragListImpl<T>(
     }
     panGrantedRef.current = false;
     grantActiveCenterOffsetRef.current = 0;
-    clearAutoScrollTimer();
+    moveGeometryRef.current = null;
+    autoScrollSeededRef.current = false;
+    stopAutoScroll();
   }, []);
 
   if (lastDataRef.current !== data) {
@@ -639,9 +840,10 @@ function DragListImpl<T>(
   useEffect(
     () => () => {
       clearGraceResetTimer();
+      stopAutoScroll();
       fireOwedDragEnd();
     },
-    [clearGraceResetTimer, fireOwedDragEnd]
+    [clearGraceResetTimer, stopAutoScroll, fireOwedDragEnd]
   );
 
   useLayoutEffect(() => {
@@ -666,6 +868,19 @@ function DragListImpl<T>(
       // this new drag ends before being granted (press without movement).
       clearGraceResetTimer();
       panGrantedRef.current = false;
+      // A new drag starts a new authority window for the auto-scroll offsets.
+      // reset() normally clears these, but a drag that supersedes a reorder
+      // still awaiting (or inside its grace window) never went through reset,
+      // and the stale offsets would be read against a grantScrollPosRef this
+      // drag captures from scrollPos — handing the new item a phantom
+      // displacement the moment you move it. Tearing the loop down here too
+      // (rather than leaning on shouldCapturePan to prove none can be running)
+      // matters because onDragStart is public API: a host driving it from its
+      // own recognizer can land here mid-loop, and a frame still in flight
+      // would repaint the new item against the old drag's geometry.
+      autoScrollSeededRef.current = false;
+      moveGeometryRef.current = null;
+      stopAutoScroll();
       // Zero pan synchronously before the activation render attaches it,
       // so the new active item can't inherit a stale offset from a
       // previous drag (setValue also pushes to the native side before the
@@ -720,18 +935,56 @@ function DragListImpl<T>(
 
   const onDragScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      const { contentOffset, contentSize, layoutMeasurement } =
+      const { contentOffset, contentSize, layoutMeasurement, contentInset } =
         event.nativeEvent;
 
+      const mirroredLayout = isLayoutMirrored(props.horizontal);
+
       scrollPos.current = props.horizontal ? contentOffset.x : contentOffset.y;
-      flowScrollPos.current = isLayoutMirrored(props.horizontal)
+      flowScrollPos.current = mirroredLayout
         ? contentSize.width - (contentOffset.x + layoutMeasurement.width)
         : scrollPos.current;
+      contentExtentRef.current = props.horizontal
+        ? contentSize.width
+        : contentSize.height;
+      // The insets at each end of the main axis. Without them the auto-scroll
+      // clamp declares itself pinned an inset early, stranding the outermost
+      // rows under whatever the inset was reserved for.
+      //
+      // Deliberately zero under a mirrored layout. Which cartesian side backs
+      // onto the end of the data there depends on how many times the flow
+      // offset gets mirrored on the way down (VirtualizedList converts, and
+      // the iOS view may convert again depending on architecture), and that's
+      // not something to settle by reading platform source. Guessing wrong in
+      // the loose direction is the one failure this clamp can't absorb: the
+      // platform silently caps a command the loop believes landed, and its
+      // offset stays ahead of reality for the rest of the drag. Zero can only
+      // err tight, which costs an early pin and nothing else.
+      autoScrollTrailingInsetRef.current = mirroredLayout
+        ? 0
+        : (props.horizontal ? contentInset?.right : contentInset?.bottom) ?? 0;
+      autoScrollLeadingInsetRef.current = mirroredLayout
+        ? 0
+        : (props.horizontal ? contentInset?.left : contentInset?.top) ?? 0;
+      // Every clamp input above just changed, so a loop pinned against the old
+      // ones may have room again.
+      resumeAutoScrollIfPinned();
       if (onScroll) {
         onScroll(event);
       }
     },
     [onScroll]
+  );
+
+  const onDragContentSizeChange = useCallback(
+    (width: number, height: number) => {
+      contentExtentRef.current = props.horizontal ? width : height;
+      resumeAutoScrollIfPinned();
+      if (onContentSizeChange) {
+        onContentSizeChange(width, height);
+      }
+    },
+    [onContentSizeChange]
   );
 
   const onDragLayout = useCallback(
@@ -742,6 +995,10 @@ function DragListImpl<T>(
         flatWrapLayout.current = props.horizontal
           ? { pos: pageX, extent: width }
           : { pos: pageY, extent: height };
+        // The viewport feeds the far bound too, so a wrapper that shrinks
+        // mid-drag (split-view resize, a parent relayout) can hand a pinned
+        // loop more room to cover.
+        resumeAutoScrollIfPinned();
       });
       if (onLayout) {
         onLayout(evt);
@@ -781,11 +1038,19 @@ function DragListImpl<T>(
           renderItem={renderDragItem}
           CellRendererComponent={CellRendererComponent}
           extraData={extra}
-          scrollEnabled={!activeDataRef.current}
           onScroll={onDragScroll}
+          onContentSizeChange={onDragContentSizeChange}
           scrollEventThrottle={16} // From react-native-draggable-flatlist; no idea why.
           removeClippedSubviews={false} // https://github.com/facebook/react-native/issues/18616
           {...rest}
+          // Deliberately after the spread, unlike everything above it. A host
+          // passing scrollEnabled={true} would otherwise let the user scroll
+          // with a second finger mid-drag, and the auto-scroll loop's offset
+          // is only authoritative because nothing else moves the list while a
+          // drag is live. Host intent still applies whenever we're idle.
+          scrollEnabled={
+            activeDataRef.current ? false : props.scrollEnabled ?? true
+          }
         />
       </View>
     </DragListProvider>
@@ -793,7 +1058,16 @@ function DragListImpl<T>(
 }
 
 const SLIDE_MILLIS = 200;
-const AUTO_SCROLL_MILLIS = 200;
+// Auto-scroll speed at the moment you cross an edge, and once you're a full
+// ramp beyond it. The floor keeps a graze from looking frozen; the ceiling is
+// roughly a phone screen per second, past which you can't see where you are.
+const AUTO_SCROLL_MIN_PIXELS_PER_SEC = 90;
+const AUTO_SCROLL_MAX_PIXELS_PER_SEC = 850;
+// Bounds on the overshoot distance the speed ramp is measured against, which
+// is otherwise the dragged item's own extent.
+const AUTO_SCROLL_MIN_RAMP_PIXELS = 40;
+const AUTO_SCROLL_MAX_RAMP_PIXELS = 200;
+const AUTO_SCROLL_MAX_FRAME_MILLIS = 50;
 // How long, after onReordered resolves, we wait for the parent's data change
 // (the atomic teardown path) before force-resetting the drag. Long enough for
 // async/debounced stores to round-trip; short enough that a parent that never

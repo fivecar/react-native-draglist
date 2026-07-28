@@ -428,6 +428,10 @@ function DragListImpl<T>(
     }
   }, []);
 
+  // The loop has three states, spelled by these two refs: idle (no velocity,
+  // no frame), running (both), and *pinned* against an end of the list (a
+  // velocity, but no frame). Pinning keeps the velocity precisely so a later
+  // change to the clamp can tell which way the drag still wants to go.
   const stopAutoScroll = useCallback(() => {
     if (autoScrollFrameRef.current !== null) {
       cancelAnimationFrame(autoScrollFrameRef.current);
@@ -492,9 +496,11 @@ function DragListImpl<T>(
     const applied = offset - autoScrollOffsetRef.current;
 
     if (applied === 0) {
-      // Pinned against an end of the list. Nothing else moves the offset
-      // while a drag is up, so idle until a move event revives us.
-      stopAutoScroll();
+      // Pinned against an end of the list. Nothing else moves the offset while
+      // a drag is up, so stop scheduling frames and idle until a move event or
+      // a change in the clamp revives us. Returning without clearing the
+      // velocity is what leaves this distinguishable from being stopped: the
+      // frame ref was already nulled at the top of this callback.
       return;
     }
 
@@ -505,6 +511,24 @@ function DragListImpl<T>(
     flatRef.current?.scrollToOffset({ animated: false, offset });
     updateRendering();
     autoScrollFrameRef.current = requestAnimationFrame(autoScrollFrame);
+  }, []);
+
+  // Revives a pinned loop after something that feeds the clamp moves. A list
+  // without `getItemLayout` revises its content size as rows mount, which can
+  // push the far bound out from under a loop that already pinned against the
+  // old estimate — and a finger held still past the edge produces no move
+  // event to restart it, so the drag would otherwise stall short of the real
+  // end of the list. Resuming while still pinned costs one frame that computes
+  // zero travel and returns, so this can't spin.
+  const resumeAutoScrollIfPinned = useCallback(() => {
+    if (
+      activeDataRef.current &&
+      autoScrollVelocityRef.current !== 0 &&
+      autoScrollFrameRef.current === null
+    ) {
+      autoScrollTimeRef.current = Date.now();
+      autoScrollFrameRef.current = requestAnimationFrame(autoScrollFrame);
+    }
   }, []);
 
   // Points the auto-scroll loop at a new speed, starting it if it isn't
@@ -941,6 +965,9 @@ function DragListImpl<T>(
       autoScrollLeadingInsetRef.current = mirroredLayout
         ? 0
         : (props.horizontal ? contentInset?.left : contentInset?.top) ?? 0;
+      // Every clamp input above just changed, so a loop pinned against the old
+      // ones may have room again.
+      resumeAutoScrollIfPinned();
       if (onScroll) {
         onScroll(event);
       }
@@ -951,6 +978,7 @@ function DragListImpl<T>(
   const onDragContentSizeChange = useCallback(
     (width: number, height: number) => {
       contentExtentRef.current = props.horizontal ? width : height;
+      resumeAutoScrollIfPinned();
       if (onContentSizeChange) {
         onContentSizeChange(width, height);
       }

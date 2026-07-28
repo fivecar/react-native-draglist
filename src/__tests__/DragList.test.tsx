@@ -31,6 +31,9 @@ interface Harness {
       right: number;
     }>
   ) => void;
+  // Reports a new main-axis content length, as a list without getItemLayout
+  // does when mounting rows revises its estimate.
+  growContent: (contentLength: number) => void;
   flatList: () => ReturnType<ReactTestRenderer["root"]["findByType"]>;
 }
 
@@ -127,7 +130,7 @@ function renderDragList(props: {
   // VirtualizedList's metrics aggregator refuses to resolve cell offsets
   // until it knows the content size, because under RTL it mirrors them
   // against the content length. Real lists always report this first.
-  function layoutContent() {
+  function layoutContent(contentLength?: number) {
     // DragList passes its own onContentSizeChange down (VirtualizedList
     // chains it), so several nodes match. The innermost is the scroll view,
     // and only its handler runs VirtualizedList's own bookkeeping.
@@ -135,8 +138,12 @@ function renderDragList(props: {
       node => typeof node.props?.onContentSizeChange === "function"
     );
     const scrollView = matches[matches.length - 1];
+    const main = contentLength ?? (horizontal ? wrapRect.width : wrapRect.height);
     act(() => {
-      scrollView.props.onContentSizeChange(wrapRect.width, wrapRect.height);
+      scrollView.props.onContentSizeChange(
+        horizontal ? main : wrapRect.width,
+        horizontal ? wrapRect.height : main
+      );
     });
   }
 
@@ -216,6 +223,7 @@ function renderDragList(props: {
         });
       });
     },
+    growContent: contentLength => layoutContent(contentLength),
     flatList: () => renderer.root.findByType(FlatList),
   };
   return harness;
@@ -1281,6 +1289,43 @@ describe("mirrored layouts (bug: RTL horizontal drags are frozen)", () => {
 
     const [{ offset }] = scrollToOffset.mock.calls[0];
     expect(offset).toBeGreaterThan(CONTENT_LENGTH - LIST_EXTENT);
+  });
+
+  it("resumes when measured content grows past the bound it pinned against", async () => {
+    // A list without getItemLayout revises its content size as rows mount,
+    // which can push the far bound out from under a loop that already pinned
+    // against the old estimate. A finger held past the edge produces no move
+    // event, so the drag would stall short of the real end of the list.
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    // Content barely longer than the viewport, so the loop pins almost at once.
+    harness.scroll(0, LIST_EXTENT + 20);
+    const scrollToOffset = spyOnScrollToOffset(harness);
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
+      );
+    });
+    advanceFrames(10);
+
+    const pinnedAt = scrollToOffset.mock.calls.at(-1)![0].offset;
+    expect(pinnedAt).toBeCloseTo(20);
+
+    // Confirm it really stopped scheduling frames rather than spinning.
+    scrollToOffset.mockClear();
+    advanceFrames(5);
+    expect(scrollToOffset).not.toHaveBeenCalled();
+
+    // More rows mount and the estimate grows, with no move event to follow.
+    harness.growContent(LIST_EXTENT + 400);
+    advanceFrames(5);
+
+    expect(scrollToOffset.mock.calls.at(-1)?.[0].offset).toBeGreaterThan(
+      pinnedAt
+    );
   });
 
   it("tears the loop down when a host starts a new drag mid-scroll", async () => {

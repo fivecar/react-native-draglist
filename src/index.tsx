@@ -12,6 +12,7 @@ import {
   FlatList,
   FlatListProps,
   GestureResponderEvent,
+  I18nManager,
   LayoutChangeEvent,
   ListRenderItemInfo,
   NativeScrollEvent,
@@ -154,6 +155,31 @@ const DragListItem = React.memo(
     prev.numItems === next.numItems
 ) as unknown as typeof DragListItemImpl;
 
+// Whether the list's layout runs opposite to its coordinate axis, i.e.
+// whether an item's cached `pos` DESCENDS as its index rises. Horizontal
+// lists do this under RTL: Yoga mirrors the row, so index 0 gets the largest
+// x, while touch coordinates and `contentOffset` stay plain left-origin.
+// Anything that relates positions to indices must therefore walk the axis in
+// "flow" order (increasing with index) rather than in coordinate order.
+//
+// This is deliberately only about the *layout* stage. The `inverted` prop
+// mirrors at the render stage instead — VirtualizedList applies a scaleX/
+// scaleY of -1 that Yoga never sees — which leaves `pos` ascending and
+// instead flips the mapping from touch coordinates into content
+// coordinates. That's an independent flag; supporting it means a second
+// predicate here plus its own handling, and it is currently unsupported.
+function isLayoutMirrored(horizontal: boolean | null | undefined) {
+  return !!horizontal && I18nManager.isRTL;
+}
+
+// An item's far edge in flow order: the edge you must drag past for the item
+// to count as sitting before you in the data. Mirrored layouts run backwards
+// through coordinate space, so their flow edge is the near one, negated to
+// keep flow positions ascending with index.
+function flowTrailingEdge(layout: PosExtent, mirrored: boolean) {
+  return mirrored ? -layout.pos : layout.pos + layout.extent;
+}
+
 function DragListImpl<T>(
   props: Props<T>,
   ref?: React.ForwardedRef<FlatList<T> | null>
@@ -247,7 +273,14 @@ function DragListImpl<T>(
     extent: 1,
   });
   const flatWrapRefPosUpdatedRef = useRef(false);
+  // The cartesian scroll offset, i.e. what `contentOffset` reports and what
+  // cached layouts are expressed in.
   const scrollPos = useRef(0);
+  // The same position counted from the start of the data instead of from the
+  // origin of the axis. The two only differ under a mirrored layout, where
+  // the data starts at the far end — but that's the space scrollToOffset
+  // works in, so auto-scroll targets have to be built here.
+  const flowScrollPos = useRef(0);
 
   // pan is the drag dy.
   //
@@ -334,6 +367,7 @@ function DragListImpl<T>(
         return;
       }
 
+      const mirrored = isLayoutMirrored(props.horizontal);
       const posOrigin = props.horizontal ? gestate.x0 : gestate.y0;
       let pos = props.horizontal ? gestate.dx : gestate.dy;
       let wrapPos = posOrigin + pos - flatWrapLayout.current.pos;
@@ -371,7 +405,14 @@ function DragListImpl<T>(
         // heights, starting from the first element. Note that we can't do
         // this math if any element up to your drag point hasn't been measured
         // yet. I don't think that should ever happen, but take note.
+        //
+        // The walk runs in flow order, which is coordinate order only when
+        // the layout isn't mirrored. Negating both sides under a mirrored
+        // layout keeps the comparison (and hence the loop) pointing the same
+        // way as the data.
         const clientPos = wrapPos + scrollPos.current;
+        const dragCenter = clientPos + grantActiveCenterOffsetRef.current;
+        const flowDragCenter = mirrored ? -dragCenter : dragCenter;
         let curIndex = 0;
         let key;
         while (
@@ -379,8 +420,7 @@ function DragListImpl<T>(
           layouts.hasOwnProperty(
             (key = keyExtractorRef.current(dataRef.current[curIndex], curIndex))
           ) &&
-          layouts[key].pos + layouts[key].extent <
-            clientPos + grantActiveCenterOffsetRef.current
+          flowTrailingEdge(layouts[key], mirrored) < flowDragCenter
         ) {
           curIndex++;
         }
@@ -414,9 +454,19 @@ function DragListImpl<T>(
 
       if (offset !== 0) {
         function scrollOnce(distance: number) {
+          // `distance` is a cartesian nudge — which way the content should
+          // slide under the viewport. scrollToOffset, though, takes an offset
+          // measured from the start of the data, so under a mirrored layout
+          // both the origin and the sign of the nudge have to be converted.
+          // Feeding it the cartesian position instead makes it convert a
+          // second time, which throws the list most of its length away.
+          const target = mirrored
+            ? flowScrollPos.current - distance
+            : scrollPos.current + distance;
+
           flatRef.current?.scrollToOffset({
             animated: true,
-            offset: Math.max(0, scrollPos.current + distance),
+            offset: Math.max(0, target),
           });
           updateRendering();
         }
@@ -670,9 +720,13 @@ function DragListImpl<T>(
 
   const onDragScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      scrollPos.current = props.horizontal
-        ? event.nativeEvent.contentOffset.x
-        : event.nativeEvent.contentOffset.y;
+      const { contentOffset, contentSize, layoutMeasurement } =
+        event.nativeEvent;
+
+      scrollPos.current = props.horizontal ? contentOffset.x : contentOffset.y;
+      flowScrollPos.current = isLayoutMirrored(props.horizontal)
+        ? contentSize.width - (contentOffset.x + layoutMeasurement.width)
+        : scrollPos.current;
       if (onScroll) {
         onScroll(event);
       }
@@ -842,10 +896,18 @@ function CellRendererComponent<T>(props: CellRendererProps<T>) {
       let target = 0;
 
       if (!isActive && layouts.hasOwnProperty(activeKey)) {
+        // How far a displaced neighbor travels to move one slot later in the
+        // data. Under a mirrored layout that direction is toward lower
+        // coordinates, and transforms aren't mirrored for us the way layout
+        // is, so the sign has to be applied by hand.
+        const slot = isLayoutMirrored(horizontal)
+          ? -layouts[activeKey].extent
+          : layouts[activeKey].extent;
+
         if (index >= hoverIndex && index <= activeIndex) {
-          target = layouts[activeKey].extent;
+          target = slot;
         } else if (index >= activeIndex && index <= hoverIndex) {
-          target = -layouts[activeKey].extent;
+          target = -slot;
         }
       }
       if (target === slideTargetRef.current) {

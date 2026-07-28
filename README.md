@@ -131,6 +131,20 @@ such things, but I suspect most attempts will be fraught with issues because the
 a multi-column list isn't immediately obvious, especially when the underlying `FlatList`
 implementation can't be controlled from the outside.
 
+## Does this work in right-to-left (RTL) layouts?
+Horizontal lists do. Vertical lists were never affected, since RTL only mirrors the horizontal axis.
+
+The reason horizontal lists needed work is that RTL mirrors a list in two places at once. Yoga
+mirrors the row during layout, so an item's measured position *descends* as its index rises, and
+`scrollToOffset` switches to counting its offset from the start of the data (the right edge) while
+`onScroll` keeps reporting a plain left-origin `contentOffset`. `DragList` accounts for both, so
+hit-testing, the slide animations, and auto-scroll all follow the data rather than the screen axis.
+
+`inverted` is a separate matter and is **not** supported. It mirrors at the render stage — a
+`scaleX`/`scaleY` transform that Yoga never sees — rather than at the layout stage, so it leaves
+positions ascending and instead flips the mapping from touch coordinates into content coordinates.
+Dragging in an `inverted` list will compute the wrong drop index. PRs welcome.
+
 ## Can I wrap my rows in other gesture recognizers (Swipeable, etc.)?
 Yes, but understand what happens when the two gesture systems fight. `DragList` uses React Native's
 `PanResponder` (the JS responder system). Native gesture recognizers — such as

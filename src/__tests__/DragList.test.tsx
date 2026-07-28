@@ -1212,6 +1212,59 @@ describe("mirrored layouts (bug: RTL horizontal drags are frozen)", () => {
     expect(offset).toBeGreaterThan(CONTENT_LENGTH - LIST_EXTENT);
   });
 
+  it("stays inside a leading content inset instead of snapping out of it", async () => {
+    // A list resting inside a *leading* inset reports a negative offset, and
+    // that's legal — iOS clamps to fmin(-contentInset.left, 0), not to 0. A
+    // lower bound of 0 would command the list out of the inset on the drag's
+    // very first frame, and since rendering draws against the commanded
+    // offset, the dragged item lurches the width of the inset with it.
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(-100, CONTENT_LENGTH, { left: 100 });
+    const scrollToOffset = spyOnScrollToOffset(harness);
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
+      );
+    });
+    advanceFrames(1);
+
+    const [{ offset }] = scrollToOffset.mock.calls[0];
+    expect(offset).toBeLessThan(0);
+    expect(offset).toBeGreaterThan(-100);
+  });
+
+  it("tears the loop down when a host starts a new drag mid-scroll", async () => {
+    // onDragStart is public API, so a host driving it from its own recognizer
+    // can supersede a live drag without any release. A frame still in flight
+    // would then repaint the new active item against the old drag's geometry.
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(0, CONTENT_LENGTH);
+    const scrollToOffset = spyOnScrollToOffset(harness);
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
+      );
+    });
+    advanceFrames(3);
+    expect(scrollToOffset).toHaveBeenCalled();
+    scrollToOffset.mockClear();
+
+    await act(async () => {
+      harness.infos["gamma"].onDragStart();
+    });
+    advanceFrames(5);
+
+    expect(scrollToOffset).not.toHaveBeenCalled();
+  });
+
   it("does not inherit the commanded offset when a new drag supersedes a reorder", async () => {
     // A drag started while a reorder is still awaiting (or inside its grace
     // window) never went through reset, so the previous drag's auto-scroll

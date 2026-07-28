@@ -1109,6 +1109,74 @@ describe("mirrored layouts (bug: RTL horizontal drags are frozen)", () => {
     expect(scrollToOffset).not.toHaveBeenCalled();
   });
 
+  it("tracks the hover index against the offset it commanded, not the last reported one", async () => {
+    // onScroll reports lag the loop by a frame or more and arrive unevenly, so
+    // drawing the drag against them jitters the dragged item and leaves the
+    // last command before an end-of-list pin undrawn — a release then reorders
+    // to a stale slot. Delivering no scroll reports at all makes the
+    // distinction visible: the hover index must still advance.
+    installFrameQueue();
+    const onHoverChanged = jest.fn();
+    // Enough items that the hover index has somewhere left to go once the
+    // drag is already held past the edge.
+    const harness = renderDragList({
+      horizontal: true,
+      data: ["alpha", ...Array.from({ length: 11 }, (_, i) => `item${i}`)],
+      onHoverChanged,
+    });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(0, CONTENT_LENGTH);
+    spyOnScrollToOffset(harness);
+
+    // Hold past the trailing edge. This alone puts the hover index partway
+    // along; everything past that has to come from auto-scroll.
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
+      );
+    });
+    const hoverBeforeScrolling = onHoverChanged.mock.calls.at(-1)?.[0];
+    advanceFrames(20);
+
+    expect(onHoverChanged.mock.calls.at(-1)?.[0]).toBeGreaterThan(
+      hoverBeforeScrolling
+    );
+  });
+
+  it("keeps the commanded offset across a loop restart mid-drag", async () => {
+    // Dipping back inside the list stops the loop, and crossing the edge again
+    // restarts it. Reseeding from scrollPos there would command a position the
+    // list has already scrolled past, jerking the drag backwards.
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(0, CONTENT_LENGTH);
+    const scrollToOffset = spyOnScrollToOffset(harness);
+
+    const pastEdge = { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 };
+    const insideList = { x0: LTR_ITEM0_CENTER, y0: 0, dx: 0, dy: 0 };
+    await act(async () => {
+      harness.config.onPanResponderMove?.({} as any, pastEdge as any);
+    });
+    advanceFrames(3);
+    const beforeRestart = scrollToOffset.mock.calls.at(-1)![0].offset;
+
+    // Back inside (loop stops), then past the edge again, without ever letting
+    // an onScroll report land.
+    await act(async () => {
+      harness.config.onPanResponderMove?.({} as any, insideList as any);
+    });
+    await act(async () => {
+      harness.config.onPanResponderMove?.({} as any, pastEdge as any);
+    });
+    advanceFrames(1);
+
+    expect(scrollToOffset.mock.calls.at(-1)![0].offset).toBeGreaterThan(
+      beforeRestart
+    );
+  });
+
   it("stops auto-scrolling once the drag is released", async () => {
     installFrameQueue();
     const harness = renderDragList({ horizontal: true });

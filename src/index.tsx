@@ -228,6 +228,16 @@ function DragListImpl<T>(
   // from scrollPos every frame: onScroll lands a frame or more late, so
   // re-reading it would keep re-applying travel the list already made.
   const autoScrollOffsetRef = useRef(0);
+  // The same position in cartesian space, kept in lockstep with the above so
+  // the drag can be drawn against what we commanded instead of what onScroll
+  // last reported. See effectiveScrollPos.
+  const autoScrollScrollPosRef = useRef(0);
+  // Whether the loop's offsets have been seeded during the current drag. They
+  // survive the loop stopping and restarting (which happens every time your
+  // finger dips back inside the list), because reseeding from the lagging
+  // scrollPos would command a position the list has already passed and jerk
+  // the drag backwards.
+  const autoScrollSeededRef = useRef(false);
   const autoScrollTimeRef = useRef(0);
   const autoScrollMirroredRef = useRef(false);
   // Main-axis content length, used to clamp the loop at the end of the list.
@@ -338,6 +348,22 @@ function DragListImpl<T>(
     );
   }, []);
 
+  // The scroll position the drag should be drawn against. Once auto-scroll has
+  // run during this drag, that's the offset we commanded rather than the one
+  // onScroll last reported: reports lag a frame or more and arrive unevenly,
+  // so drawing against them jitters the dragged item against smoothly moving
+  // content, and the loop's last command before it pins at an end would never
+  // be drawn at all — leaving a release to reorder to a stale slot. Nothing
+  // else moves the list mid-drag (scrolling is disabled), so the commanded
+  // value stays authoritative even while the loop is stopped.
+  const effectiveScrollPos = useCallback(
+    () =>
+      autoScrollSeededRef.current
+        ? autoScrollScrollPosRef.current
+        : scrollPos.current,
+    []
+  );
+
   // Repaints the drag against the current scroll position: where the dragged
   // item sits, and which slot it would drop into. It reads the last move's
   // geometry from a ref rather than taking arguments, so the auto-scroll loop
@@ -350,7 +376,8 @@ function DragListImpl<T>(
     }
 
     const { pos, wrapPos, mirrored } = geometry;
-    const panAmount = scrollPos.current - grantScrollPosRef.current + pos;
+    const scrolled = effectiveScrollPos();
+    const panAmount = scrolled - grantScrollPosRef.current + pos;
 
     setPan(panAmount);
 
@@ -363,7 +390,7 @@ function DragListImpl<T>(
     // layout isn't mirrored. Negating both sides under a mirrored layout
     // keeps the comparison (and hence the loop) pointing the same way as the
     // data.
-    const clientPos = wrapPos + scrollPos.current;
+    const clientPos = wrapPos + scrolled;
     const dragCenter = clientPos + grantActiveCenterOffsetRef.current;
     const flowDragCenter = mirrored ? -dragCenter : dragCenter;
     let curIndex = 0;
@@ -426,21 +453,19 @@ function DragListImpl<T>(
     // so the nudge flips sign. Feeding it the cartesian value instead makes
     // VirtualizedList mirror an already-mirrored number and fling the list
     // most of its length.
+    const mirrored = autoScrollMirroredRef.current;
     const travel = (autoScrollVelocityRef.current * elapsed) / 1000;
     const offset = Math.min(
-      Math.max(
-        autoScrollOffsetRef.current +
-          (autoScrollMirroredRef.current ? -travel : travel),
-        0
-      ),
+      Math.max(autoScrollOffsetRef.current + (mirrored ? -travel : travel), 0),
       // Unknown content size leaves the far end unbounded, which just defers
       // to the platform's own clamp.
       contentExtentRef.current
         ? Math.max(0, contentExtentRef.current - flatWrapLayout.current.extent)
         : Number.POSITIVE_INFINITY
     );
+    const applied = offset - autoScrollOffsetRef.current;
 
-    if (offset === autoScrollOffsetRef.current) {
+    if (applied === 0) {
       // Pinned against an end of the list. Nothing else moves the offset
       // while a drag is up, so idle until a move event revives us.
       stopAutoScroll();
@@ -448,6 +473,9 @@ function DragListImpl<T>(
     }
 
     autoScrollOffsetRef.current = offset;
+    // The clamp above is in flow space, so the cartesian twin has to follow
+    // the travel that actually got applied rather than what we asked for.
+    autoScrollScrollPosRef.current += mirrored ? -applied : applied;
     flatRef.current?.scrollToOffset({ animated: false, offset });
     updateRendering();
     autoScrollFrameRef.current = requestAnimationFrame(autoScrollFrame);
@@ -478,14 +506,19 @@ function DragListImpl<T>(
           (AUTO_SCROLL_MAX_PIXELS_PER_SEC - AUTO_SCROLL_MIN_PIXELS_PER_SEC) *
             intensity);
 
-      if (autoScrollFrameRef.current === null) {
-        // Seed the loop's offset once per run, from the last position the
-        // list actually reported. Re-seeding mid-run is what would reintroduce
-        // onScroll's lag.
+      // Seed once per drag, from the last position the list actually
+      // reported. Reseeding on each restart would hand back the lag we
+      // integrate our own offset to avoid.
+      if (!autoScrollSeededRef.current) {
+        autoScrollSeededRef.current = true;
         autoScrollMirroredRef.current = mirrored;
         autoScrollOffsetRef.current = mirrored
           ? flowScrollPos.current
           : scrollPos.current;
+        autoScrollScrollPosRef.current = scrollPos.current;
+      }
+
+      if (autoScrollFrameRef.current === null) {
         autoScrollTimeRef.current = Date.now();
         autoScrollFrameRef.current = requestAnimationFrame(autoScrollFrame);
       }
@@ -716,6 +749,7 @@ function DragListImpl<T>(
     panGrantedRef.current = false;
     grantActiveCenterOffsetRef.current = 0;
     moveGeometryRef.current = null;
+    autoScrollSeededRef.current = false;
     stopAutoScroll();
   }, []);
 

@@ -238,16 +238,18 @@ function DragListImpl<T>(
   // scrollPos would command a position the list has already passed and jerk
   // the drag backwards. Every drag starts unseeded, though — see startDrag.
   const autoScrollSeededRef = useRef(false);
-  // Trailing content inset along the main axis, which extends how far the
-  // list can legally scroll past its content. iOS reports real values here
-  // (overlaid bars, adjusted safe areas); Android always reports zero.
+  // Main-axis content insets, which extend how far the list can legally
+  // scroll past its content at each end. iOS reports real values here
+  // (overlaid bars, adjusted safe areas); Android always reports zero. The
+  // renderers clamp our commands against exactly these values, so mirroring
+  // their arithmetic with them is exact — see CLAUDE.md.
   const autoScrollTrailingInsetRef = useRef(0);
-  // The near end of the loop's legal range. Normally zero, but a *leading*
-  // inset makes negative offsets legal too (iOS clamps to
-  // `fmin(-contentInset.top, 0)`), and a list resting inside one starts out
-  // negative. Captured from the seed rather than modelled from insets, which
-  // needs no per-axis inset reasoning and can't be looser than reality.
-  const autoScrollMinOffsetRef = useRef(0);
+  const autoScrollLeadingInsetRef = useRef(0);
+  // Floor of last resort for the loop's offset. The near bound is really
+  // -leadingInset (the renderers clamp to `fmin(-contentInset.top, 0)`), but
+  // an inset we haven't been told about yet reads as zero, and a list already
+  // resting inside one must not be clamped up out of it.
+  const autoScrollSeedFloorRef = useRef(0);
   const autoScrollTimeRef = useRef(0);
   const autoScrollMirroredRef = useRef(false);
   // Main-axis content length, used to clamp the loop at the end of the list.
@@ -465,19 +467,25 @@ function DragListImpl<T>(
     // most of its length.
     const mirrored = autoScrollMirroredRef.current;
     const travel = (autoScrollVelocityRef.current * elapsed) / 1000;
+    // Both ends mirror the renderers' own arithmetic, which counts a leading
+    // inset twice over: once as headroom before zero, and again as slack at
+    // the far end. Only its positive part, exactly as they do it.
+    const leadingInset = Math.max(autoScrollLeadingInsetRef.current, 0);
+    const minOffset = Math.min(autoScrollSeedFloorRef.current, -leadingInset);
     const offset = Math.min(
       Math.max(
         autoScrollOffsetRef.current + (mirrored ? -travel : travel),
-        autoScrollMinOffsetRef.current
+        minOffset
       ),
       // Unknown content size leaves the far end unbounded, which just defers
       // to the platform's own clamp.
       contentExtentRef.current
         ? Math.max(
-            autoScrollMinOffsetRef.current,
+            minOffset,
             contentExtentRef.current -
               flatWrapLayout.current.extent +
-              autoScrollTrailingInsetRef.current
+              autoScrollTrailingInsetRef.current +
+              leadingInset
           )
         : Number.POSITIVE_INFINITY
     );
@@ -538,7 +546,7 @@ function DragListImpl<T>(
         // legal offset. Clamping such a drag to zero would snap it out of the
         // inset on its very first frame — and since rendering now draws
         // against this offset, the dragged item lurches along with it.
-        autoScrollMinOffsetRef.current = Math.min(
+        autoScrollSeedFloorRef.current = Math.min(
           0,
           autoScrollOffsetRef.current
         );
@@ -905,16 +913,18 @@ function DragListImpl<T>(
       const { contentOffset, contentSize, layoutMeasurement, contentInset } =
         event.nativeEvent;
 
+      const mirroredLayout = isLayoutMirrored(props.horizontal);
+
       scrollPos.current = props.horizontal ? contentOffset.x : contentOffset.y;
-      flowScrollPos.current = isLayoutMirrored(props.horizontal)
+      flowScrollPos.current = mirroredLayout
         ? contentSize.width - (contentOffset.x + layoutMeasurement.width)
         : scrollPos.current;
       contentExtentRef.current = props.horizontal
         ? contentSize.width
         : contentSize.height;
-      // The inset at the end the data runs toward. Without it the auto-scroll
-      // clamp declares itself pinned an inset early, stranding the last rows
-      // under whatever the inset was reserved for.
+      // The insets at each end of the main axis. Without them the auto-scroll
+      // clamp declares itself pinned an inset early, stranding the outermost
+      // rows under whatever the inset was reserved for.
       //
       // Deliberately zero under a mirrored layout. Which cartesian side backs
       // onto the end of the data there depends on how many times the flow
@@ -925,11 +935,12 @@ function DragListImpl<T>(
       // platform silently caps a command the loop believes landed, and its
       // offset stays ahead of reality for the rest of the drag. Zero can only
       // err tight, which costs an early pin and nothing else.
-      autoScrollTrailingInsetRef.current = props.horizontal
-        ? isLayoutMirrored(props.horizontal)
-          ? 0
-          : contentInset?.right ?? 0
-        : contentInset?.bottom ?? 0;
+      autoScrollTrailingInsetRef.current = mirroredLayout
+        ? 0
+        : (props.horizontal ? contentInset?.right : contentInset?.bottom) ?? 0;
+      autoScrollLeadingInsetRef.current = mirroredLayout
+        ? 0
+        : (props.horizontal ? contentInset?.left : contentInset?.top) ?? 0;
       if (onScroll) {
         onScroll(event);
       }

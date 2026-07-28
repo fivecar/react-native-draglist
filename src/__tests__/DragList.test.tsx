@@ -1237,6 +1237,52 @@ describe("mirrored layouts (bug: RTL horizontal drags are frozen)", () => {
     expect(offset).toBeGreaterThan(-100);
   });
 
+  it("scrolls into a leading content inset it didn't start inside", async () => {
+    // The renderers clamp to fmin(-contentInset.left, 0), so a leading inset
+    // is reachable even from a list resting at zero. Flooring at zero instead
+    // strands the *first* rows under the overlay — the mirror image of the
+    // trailing-inset case.
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(0, CONTENT_LENGTH, { left: 100 });
+    const scrollToOffset = spyOnScrollToOffset(harness);
+
+    // Drag off the near edge, which scrolls back toward the start of the data.
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: -LIST_EXTENT, dy: 0 } as any
+      );
+    });
+    advanceFrames(1);
+
+    const [{ offset }] = scrollToOffset.mock.calls[0];
+    expect(offset).toBeLessThan(0);
+  });
+
+  it("counts a leading inset as slack at the far end too", async () => {
+    // The renderers add fmax(contentInset.top, 0) to their own upper bound, so
+    // a list with a leading inset can scroll that much further past its
+    // content. Omitting the term pins short of the platform's real end.
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(CONTENT_LENGTH - LIST_EXTENT, CONTENT_LENGTH, { left: 100 });
+    const scrollToOffset = spyOnScrollToOffset(harness);
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
+      );
+    });
+    advanceFrames(1);
+
+    const [{ offset }] = scrollToOffset.mock.calls[0];
+    expect(offset).toBeGreaterThan(CONTENT_LENGTH - LIST_EXTENT);
+  });
+
   it("tears the loop down when a host starts a new drag mid-scroll", async () => {
     // onDragStart is public API, so a host driving it from its own recognizer
     // can supersede a live drag without any release. A frame still in flight

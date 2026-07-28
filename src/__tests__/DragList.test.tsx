@@ -41,6 +41,7 @@ function renderDragList(props: {
   onDragEnd?: () => void;
   onHoverChanged?: (hoverIndex: number) => void;
   onReordered?: (from: number, to: number) => Promise<void> | void;
+  scrollEnabled?: boolean;
 }): Harness {
   const horizontal = !!props.horizontal;
   // Under RTL, Yoga mirrors a horizontal row, so index 0 lands at the far end
@@ -78,6 +79,7 @@ function renderDragList(props: {
         onDragEnd={props.onDragEnd}
         onHoverChanged={props.onHoverChanged}
         onReordered={props.onReordered}
+        scrollEnabled={props.scrollEnabled}
       />
     );
   }
@@ -1253,6 +1255,20 @@ describe("mirrored layouts (bug: RTL horizontal drags are frozen)", () => {
     });
 
     expect(cellTransform(harness, "gamma").translateX?.__getValue?.()).toBe(0);
+  });
+
+  it("disables native scrolling mid-drag even when the host asked for it", async () => {
+    // The auto-scroll loop's offset is only authoritative because nothing else
+    // moves the list while a drag is live. scrollEnabled used to sit before the
+    // {...rest} spread, so a host passing scrollEnabled={true} silently kept
+    // native scrolling on and could move the list out from under the loop with
+    // a second finger.
+    const harness = renderDragList({ scrollEnabled: true });
+    expect(harness.flatList().props.scrollEnabled).toBe(true);
+
+    await startGrantedDrag(harness);
+
+    expect(harness.flatList().props.scrollEnabled).toBe(false);
   });
 
   it("stops auto-scrolling once the drag is released", async () => {

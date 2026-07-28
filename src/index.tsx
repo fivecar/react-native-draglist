@@ -963,12 +963,19 @@ function DragListImpl<T>(
           renderItem={renderDragItem}
           CellRendererComponent={CellRendererComponent}
           extraData={extra}
-          scrollEnabled={!activeDataRef.current}
           onScroll={onDragScroll}
           onContentSizeChange={onDragContentSizeChange}
           scrollEventThrottle={16} // From react-native-draggable-flatlist; no idea why.
           removeClippedSubviews={false} // https://github.com/facebook/react-native/issues/18616
           {...rest}
+          // Deliberately after the spread, unlike everything above it. A host
+          // passing scrollEnabled={true} would otherwise let the user scroll
+          // with a second finger mid-drag, and the auto-scroll loop's offset
+          // is only authoritative because nothing else moves the list while a
+          // drag is live. Host intent still applies whenever we're idle.
+          scrollEnabled={
+            activeDataRef.current ? false : props.scrollEnabled ?? true
+          }
         />
       </View>
     </DragListProvider>

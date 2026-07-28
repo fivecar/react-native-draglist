@@ -471,9 +471,12 @@ function DragListImpl<T>(
     // most of its length.
     const mirrored = autoScrollMirroredRef.current;
     const travel = (autoScrollVelocityRef.current * elapsed) / 1000;
-    // Both ends mirror the renderers' own arithmetic, which counts a leading
-    // inset twice over: once as headroom before zero, and again as slack at
-    // the far end. Only its positive part, exactly as they do it.
+    // A leading inset moves the near bound only. The renderers' `maxRect` adds
+    // `fmax(leadingInset, 0)` to its *width*, which reads like far-end slack
+    // but isn't: the rect's origin is `-leadingInset`, so `CGRectGetMaxX` —
+    // origin plus width — cancels the term and lands back on
+    // `contentSize - viewport + trailingInset`. Mirroring a CGRect means
+    // mirroring its corners, not its dimensions.
     const leadingInset = Math.max(autoScrollLeadingInsetRef.current, 0);
     const minOffset = Math.min(autoScrollSeedFloorRef.current, -leadingInset);
     const offset = Math.min(
@@ -488,8 +491,7 @@ function DragListImpl<T>(
             minOffset,
             contentExtentRef.current -
               flatWrapLayout.current.extent +
-              autoScrollTrailingInsetRef.current +
-              leadingInset
+              autoScrollTrailingInsetRef.current
           )
         : Number.POSITIVE_INFINITY
     );
@@ -994,6 +996,10 @@ function DragListImpl<T>(
         flatWrapLayout.current = props.horizontal
           ? { pos: pageX, extent: width }
           : { pos: pageY, extent: height };
+        // The viewport feeds the far bound too, so a wrapper that shrinks
+        // mid-drag (split-view resize, a parent relayout) can hand a pinned
+        // loop more room to cover.
+        resumeAutoScrollIfPinned();
       });
       if (onLayout) {
         onLayout(evt);

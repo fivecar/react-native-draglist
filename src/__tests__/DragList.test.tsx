@@ -34,6 +34,9 @@ interface Harness {
   // Reports a new main-axis content length, as a list without getItemLayout
   // does when mounting rows revises its estimate.
   growContent: (contentLength: number) => void;
+  // Shrinks the wrapper's main axis and re-fires its layout, as a split-view
+  // resize or a parent relayout does mid-drag.
+  shrinkWrapper: (extent: number) => void;
   flatList: () => ReturnType<ReactTestRenderer["root"]["findByType"]>;
 }
 
@@ -224,6 +227,16 @@ function renderDragList(props: {
       });
     },
     growContent: contentLength => layoutContent(contentLength),
+    shrinkWrapper: extent => {
+      // The patched measure() reads wrapRect when called, so mutating it is
+      // enough for the re-fired layout to report the new extent.
+      if (horizontal) {
+        wrapRect.width = extent;
+      } else {
+        wrapRect.height = extent;
+      }
+      harness.layoutWrapper();
+    },
     flatList: () => renderer.root.findByType(FlatList),
   };
   return harness;
@@ -1269,10 +1282,13 @@ describe("mirrored layouts (bug: RTL horizontal drags are frozen)", () => {
     expect(offset).toBeLessThan(0);
   });
 
-  it("counts a leading inset as slack at the far end too", async () => {
-    // The renderers add fmax(contentInset.top, 0) to their own upper bound, so
-    // a list with a leading inset can scroll that much further past its
-    // content. Omitting the term pins short of the platform's real end.
+  it("does not treat a leading inset as slack at the far end", async () => {
+    // The renderers' maxRect adds fmax(leadingInset, 0) to its *width*, which
+    // reads like far-end slack but only cancels the rect's -leadingInset
+    // origin: CGRectGetMaxX lands back on contentSize - viewport +
+    // trailingInset. Counting it would command past the platform's real
+    // maximum, and the loop would go on believing offsets the native view
+    // silently capped — the one error direction this clamp can't absorb.
     installFrameQueue();
     const harness = renderDragList({ horizontal: true });
     await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
@@ -1285,10 +1301,9 @@ describe("mirrored layouts (bug: RTL horizontal drags are frozen)", () => {
         { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
       );
     });
-    advanceFrames(1);
+    advanceFrames(5);
 
-    const [{ offset }] = scrollToOffset.mock.calls[0];
-    expect(offset).toBeGreaterThan(CONTENT_LENGTH - LIST_EXTENT);
+    expect(scrollToOffset).not.toHaveBeenCalled();
   });
 
   it("resumes when measured content grows past the bound it pinned against", async () => {
@@ -1321,6 +1336,41 @@ describe("mirrored layouts (bug: RTL horizontal drags are frozen)", () => {
 
     // More rows mount and the estimate grows, with no move event to follow.
     harness.growContent(LIST_EXTENT + 400);
+    advanceFrames(5);
+
+    expect(scrollToOffset.mock.calls.at(-1)?.[0].offset).toBeGreaterThan(
+      pinnedAt
+    );
+  });
+
+  it("resumes when a shrinking viewport gives the clamp more room", async () => {
+    // The viewport feeds the far bound too, so a wrapper that shrinks mid-drag
+    // (split-view resize, a parent relayout) makes more content reachable. Only
+    // onScroll and onContentSizeChange used to revive a pinned loop, leaving a
+    // stationary finger stuck at the bound computed for the old viewport.
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(0, LIST_EXTENT + 20);
+    const scrollToOffset = spyOnScrollToOffset(harness);
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
+      );
+    });
+    advanceFrames(10);
+
+    const pinnedAt = scrollToOffset.mock.calls.at(-1)![0].offset;
+    expect(pinnedAt).toBeCloseTo(20);
+    scrollToOffset.mockClear();
+    advanceFrames(5);
+    expect(scrollToOffset).not.toHaveBeenCalled();
+
+    // 200px narrower viewport means 200px more content to cover, with no move
+    // event to restart anything.
+    harness.shrinkWrapper(LIST_EXTENT - 200);
     advanceFrames(5);
 
     expect(scrollToOffset.mock.calls.at(-1)?.[0].offset).toBeGreaterThan(

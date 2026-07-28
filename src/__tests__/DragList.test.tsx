@@ -21,7 +21,16 @@ interface Harness {
   update: (data: string[]) => void;
   layoutCells: () => void;
   layoutWrapper: () => void;
-  scroll: (cartesianOffset: number, contentLength: number) => void;
+  scroll: (
+    cartesianOffset: number,
+    contentLength: number,
+    contentInset?: Partial<{
+      top: number;
+      bottom: number;
+      left: number;
+      right: number;
+    }>
+  ) => void;
   flatList: () => ReturnType<ReactTestRenderer["root"]["findByType"]>;
 }
 
@@ -189,7 +198,7 @@ function renderDragList(props: {
     },
     // Reports a scroll at `cartesianOffset` (what contentOffset carries: an
     // offset from the origin of the axis, regardless of layout direction).
-    scroll: (cartesianOffset: number, contentLength: number) => {
+    scroll: (cartesianOffset, contentLength, contentInset) => {
       act(() => {
         harness.flatList().props.onScroll({
           nativeEvent: {
@@ -200,6 +209,7 @@ function renderDragList(props: {
               ? { width: contentLength, height: LIST_BREADTH }
               : { width: LIST_BREADTH, height: contentLength },
             layoutMeasurement: wrapRect,
+            contentInset: { top: 0, bottom: 0, left: 0, right: 0, ...contentInset },
           },
         });
       });
@@ -1175,6 +1185,74 @@ describe("mirrored layouts (bug: RTL horizontal drags are frozen)", () => {
     expect(scrollToOffset.mock.calls.at(-1)![0].offset).toBeGreaterThan(
       beforeRestart
     );
+  });
+
+  it("scrolls into a trailing content inset instead of pinning an inset early", async () => {
+    // iOS lists with a trailing inset (an overlaid bar, an adjusted safe area)
+    // can legally scroll past contentSize - viewport. Clamping without it
+    // strands the last rows under whatever the inset was reserved for. Pairs
+    // with the no-inset case above, which must still pin here.
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(CONTENT_LENGTH - LIST_EXTENT, CONTENT_LENGTH, { right: 120 });
+    const scrollToOffset = spyOnScrollToOffset(harness);
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
+      );
+    });
+    advanceFrames(1);
+
+    const [{ offset }] = scrollToOffset.mock.calls[0];
+    expect(offset).toBeGreaterThan(CONTENT_LENGTH - LIST_EXTENT);
+  });
+
+  it("does not inherit the commanded offset when a new drag supersedes a reorder", async () => {
+    // A drag started while a reorder is still awaiting (or inside its grace
+    // window) never went through reset, so the previous drag's auto-scroll
+    // offsets are still around. Reading them against a grantScrollPosRef this
+    // drag captured from scrollPos would displace the new item the moment you
+    // moved it.
+    installFrameQueue();
+    const harness = renderDragList({ horizontal: true, onReordered: () => {} });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(0, CONTENT_LENGTH);
+    spyOnScrollToOffset(harness);
+
+    // Auto-scroll a good distance, never delivering a scroll report, so the
+    // loop's offset ends up well ahead of what onScroll last said.
+    const pastEdge = { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 };
+    await act(async () => {
+      harness.config.onPanResponderMove?.({} as any, pastEdge as any);
+    });
+    advanceFrames(10);
+    await act(async () => {
+      harness.config.onPanResponderRelease?.({} as any, pastEdge as any);
+    });
+
+    // The parent never echoes data, so the grace window holds the drag state.
+    // Grab a different row mid-window and move it without any displacement.
+    const gammaCenter = 2 * ITEM_EXTENT + ITEM_EXTENT / 2;
+    await act(async () => {
+      harness.infos["gamma"].onDragStart();
+    });
+    await act(async () => {
+      harness.config.onPanResponderGrant?.(
+        {} as any,
+        { x0: gammaCenter, y0: 0, dx: 0, dy: 0 } as any
+      );
+    });
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: gammaCenter, y0: 0, dx: 0, dy: 0 } as any
+      );
+    });
+
+    expect(cellTransform(harness, "gamma").translateX?.__getValue?.()).toBe(0);
   });
 
   it("stops auto-scrolling once the drag is released", async () => {

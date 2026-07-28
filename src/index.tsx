@@ -236,8 +236,12 @@ function DragListImpl<T>(
   // survive the loop stopping and restarting (which happens every time your
   // finger dips back inside the list), because reseeding from the lagging
   // scrollPos would command a position the list has already passed and jerk
-  // the drag backwards.
+  // the drag backwards. Every drag starts unseeded, though — see startDrag.
   const autoScrollSeededRef = useRef(false);
+  // Trailing content inset along the main axis, which extends how far the
+  // list can legally scroll past its content. iOS reports real values here
+  // (overlaid bars, adjusted safe areas); Android always reports zero.
+  const autoScrollTrailingInsetRef = useRef(0);
   const autoScrollTimeRef = useRef(0);
   const autoScrollMirroredRef = useRef(false);
   // Main-axis content length, used to clamp the loop at the end of the list.
@@ -460,7 +464,12 @@ function DragListImpl<T>(
       // Unknown content size leaves the far end unbounded, which just defers
       // to the platform's own clamp.
       contentExtentRef.current
-        ? Math.max(0, contentExtentRef.current - flatWrapLayout.current.extent)
+        ? Math.max(
+            0,
+            contentExtentRef.current -
+              flatWrapLayout.current.extent +
+              autoScrollTrailingInsetRef.current
+          )
         : Number.POSITIVE_INFINITY
     );
     const applied = offset - autoScrollOffsetRef.current;
@@ -809,6 +818,13 @@ function DragListImpl<T>(
       // this new drag ends before being granted (press without movement).
       clearGraceResetTimer();
       panGrantedRef.current = false;
+      // A new drag starts a new authority window for the auto-scroll offsets.
+      // reset() normally clears this, but a drag that supersedes a reorder
+      // still awaiting (or inside its grace window) never went through reset,
+      // and the stale offsets would be read against a grantScrollPosRef this
+      // drag captures from scrollPos — handing the new item a phantom
+      // displacement the moment you move it.
+      autoScrollSeededRef.current = false;
       // Zero pan synchronously before the activation render attaches it,
       // so the new active item can't inherit a stale offset from a
       // previous drag (setValue also pushes to the native side before the
@@ -863,7 +879,7 @@ function DragListImpl<T>(
 
   const onDragScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      const { contentOffset, contentSize, layoutMeasurement } =
+      const { contentOffset, contentSize, layoutMeasurement, contentInset } =
         event.nativeEvent;
 
       scrollPos.current = props.horizontal ? contentOffset.x : contentOffset.y;
@@ -873,6 +889,16 @@ function DragListImpl<T>(
       contentExtentRef.current = props.horizontal
         ? contentSize.width
         : contentSize.height;
+      // The inset at the end the data runs toward, which a mirrored layout
+      // puts at the origin of the axis. Without it the auto-scroll clamp
+      // declares itself pinned an inset early, stranding the last rows under
+      // whatever the inset was reserved for.
+      autoScrollTrailingInsetRef.current =
+        (props.horizontal
+          ? isLayoutMirrored(props.horizontal)
+            ? contentInset?.left
+            : contentInset?.right
+          : contentInset?.bottom) ?? 0;
       if (onScroll) {
         onScroll(event);
       }

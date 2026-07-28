@@ -131,6 +131,13 @@ such things, but I suspect most attempts will be fraught with issues because the
 a multi-column list isn't immediately obvious, especially when the underlying `FlatList`
 implementation can't be controlled from the outside.
 
+## Does this work in right-to-left (RTL) layouts?
+Horizontal lists do. Vertical lists were never affected, since RTL only mirrors the horizontal axis.
+
+`inverted` is a separate matter and is **not** supported. It mirrors a list by a different mechanism
+than RTL does, which this package doesn't account for, so dragging in an `inverted` list will
+compute the wrong drop index. PRs welcome.
+
 ## Can I wrap my rows in other gesture recognizers (Swipeable, etc.)?
 Yes, but understand what happens when the two gesture systems fight. `DragList` uses React Native's
 `PanResponder` (the JS responder system). Native gesture recognizers — such as

@@ -5,7 +5,7 @@
 - `npm run build` — builds via microbundle-crl (`--no-compress --format modern,cjs`) into `dist/`
 - `npm run release` — releases via release-it (with conventional changelog and GitHub release)
 - `npm run prepare` — runs build automatically on `npm install`
-- `npm test` — runs the Jest regression suite in `src/__tests__/` (responder termination, mid-drag data changes, key stability). No linting configured.
+- `npm test` — runs the Jest regression suite in `src/__tests__/` (responder termination, mid-drag data changes, key stability, mirrored/RTL layouts). No linting configured.
 
 ## Development Workflow
 
@@ -24,6 +24,10 @@ All validation is manual — test on **both iOS and Android**. Key test cases:
 - Drag-and-release back to original position
 - "Scroll to Top" button (verifies forwardRef)
 - Horizontal list dragging
+- The same horizontal cases under RTL, via the example app's direction toggle. On iOS the toggle's
+  reload isn't enough — relaunch natively (`xcrun simctl terminate`/`launch`) for `forceRTL` to take
+  effect. Watch the printed data order under the horizontal list: the visual order mirrors, so it's
+  the only way to tell a correct drop from one that landed at the mirrored index.
 
 ## Architecture
 
@@ -40,6 +44,7 @@ Two source files:
 - **Drag teardown invariant** — `props.onDragBegin`/`props.onDragEnd` must always pair up. `dragEndOwedRef` tracks the debt; every teardown path (release, `onPanResponderTerminate`, mid-drag data change) settles it via `fireOwedDragEnd`. Responder termination commits the reorder at the current hover index (deliberate choice — see README caveat on gesture recognizers).
 - **Ref-based state for non-render paths** — `activeDataRef`, `panIndex`, `scrollPos`, `panGrantedRef` etc. are refs to avoid unnecessary re-renders during drag. `setExtra` is used sparingly to trigger re-renders only when needed.
 - **Reorder serialization** — `isReorderingRef` prevents new pan captures during an async `onReordered` callback to avoid stale-index bugs.
+- **Flow order vs. coordinate order** — Anything relating positions to indices must walk in *flow* order (increasing with data index), which equals coordinate order only when the layout isn't mirrored. `isLayoutMirrored(horizontal)` is true for horizontal lists under `I18nManager.isRTL`, where Yoga mirrors the row so `layouts[key].pos` descends as the index rises. The hover scan compares negated coordinates via `flowTrailingEdge()`, and cell slide targets flip sign, since transforms aren't mirrored for us the way layout is. Separately, `scrollToOffset` takes a flow-relative offset under RTL (counted from the start of the data) while `onScroll`'s `contentOffset` stays cartesian, so `scrollPos`/`flowScrollPos` track both spaces; feeding the cartesian value to `scrollToOffset` makes VirtualizedList mirror an already-mirrored number and flings the list most of its length. `inverted` is a *different* mirror — render-stage `scaleX`/`scaleY` that Yoga never sees, so it flips the pointer-to-content mapping instead of the index ordering — and is unsupported; it needs its own predicate, not this one.
 
 ### Platform Workarounds
 

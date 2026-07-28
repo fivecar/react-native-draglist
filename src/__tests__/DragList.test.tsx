@@ -1,11 +1,13 @@
 import React from "react";
-import { FlatList, PanResponder, Text } from "react-native";
+import { FlatList, I18nManager, PanResponder, Text } from "react-native";
 import TestRenderer, { act, ReactTestRenderer } from "react-test-renderer";
 import DragList, { DragListRenderItemInfo } from "../index";
 
 const DATA = ["alpha", "beta", "gamma"];
 const ITEM_EXTENT = 100;
 const LIST_EXTENT = 600;
+// The cross-axis size of the list, i.e. the one the drag math ignores.
+const LIST_BREADTH = 300;
 
 type Config = Parameters<typeof PanResponder.create>[0];
 
@@ -19,16 +21,26 @@ interface Harness {
   update: (data: string[]) => void;
   layoutCells: () => void;
   layoutWrapper: () => void;
+  scroll: (cartesianOffset: number, contentLength: number) => void;
   flatList: () => ReturnType<ReactTestRenderer["root"]["findByType"]>;
 }
 
 function renderDragList(props: {
   data?: string[];
+  horizontal?: boolean;
   onDragBegin?: () => void;
   onDragEnd?: () => void;
   onHoverChanged?: (hoverIndex: number) => void;
   onReordered?: (from: number, to: number) => Promise<void> | void;
 }): Harness {
+  const horizontal = !!props.horizontal;
+  // Under RTL, Yoga mirrors a horizontal row, so index 0 lands at the far end
+  // of the axis and positions descend from there.
+  const mirrored = horizontal && I18nManager.isRTL;
+  // The rect the wrapper's measure() and onLayout report.
+  const wrapRect = horizontal
+    ? { width: LIST_EXTENT, height: LIST_BREADTH }
+    : { width: LIST_BREADTH, height: LIST_EXTENT };
   const realCreate = PanResponder.create.bind(PanResponder);
   let config: Config | undefined;
   jest
@@ -50,6 +62,7 @@ function renderDragList(props: {
     return (
       <DragList
         data={data}
+        horizontal={horizontal}
         keyExtractor={(item: string) => item}
         renderItem={renderItem}
         onDragBegin={props.onDragBegin}
@@ -73,7 +86,7 @@ function renderDragList(props: {
             pageX: number,
             pageY: number
           ) => void
-        ) => cb(0, 0, 300, LIST_EXTENT, 0, 0),
+        ) => cb(0, 0, wrapRect.width, wrapRect.height, 0, 0),
       }),
     });
   });
@@ -95,10 +108,22 @@ function renderDragList(props: {
             pageX: number,
             pageY: number
           ) => void
-        ) => cb(0, 0, 300, LIST_EXTENT, 0, 0);
+        ) => cb(0, 0, wrapRect.width, wrapRect.height, 0, 0);
       });
   }
   patchMeasure();
+
+  // VirtualizedList's metrics aggregator refuses to resolve cell offsets
+  // until it knows the content size, because under RTL it mirrors them
+  // against the content length. Real lists always report this first.
+  function layoutContent() {
+    const scrollView = renderer.root.findAll(
+      node => typeof node.props?.onContentSizeChange === "function"
+    )[0];
+    act(() => {
+      scrollView.props.onContentSizeChange(wrapRect.width, wrapRect.height);
+    });
+  }
 
   const harness: Harness = {
     renderer,
@@ -124,13 +149,14 @@ function renderDragList(props: {
       act(() => {
         wrapper.props.onLayout({
           nativeEvent: {
-            layout: { x: 0, y: 0, width: 300, height: LIST_EXTENT },
+            layout: { x: 0, y: 0, ...wrapRect },
           },
         });
       });
     },
     // Fires onLayout on each cell so the internal layout cache is populated.
     layoutCells: () => {
+      layoutContent();
       const cells = renderer.root.findAll(
         node =>
           typeof node.type === "function" &&
@@ -143,17 +169,34 @@ function renderDragList(props: {
             typeof node.type === "string" &&
             typeof node.props.onLayout === "function"
         )[0];
+        const pos = mirrored
+          ? LIST_EXTENT - (index + 1) * ITEM_EXTENT
+          : index * ITEM_EXTENT;
         act(() => {
           view.props.onLayout({
             nativeEvent: {
-              layout: {
-                x: 0,
-                y: index * ITEM_EXTENT,
-                width: 300,
-                height: ITEM_EXTENT,
-              },
+              layout: horizontal
+                ? { x: pos, y: 0, width: ITEM_EXTENT, height: LIST_BREADTH }
+                : { x: 0, y: pos, width: LIST_BREADTH, height: ITEM_EXTENT },
             },
           });
+        });
+      });
+    },
+    // Reports a scroll at `cartesianOffset` (what contentOffset carries: an
+    // offset from the origin of the axis, regardless of layout direction).
+    scroll: (cartesianOffset: number, contentLength: number) => {
+      act(() => {
+        harness.flatList().props.onScroll({
+          nativeEvent: {
+            contentOffset: horizontal
+              ? { x: cartesianOffset, y: 0 }
+              : { x: 0, y: cartesianOffset },
+            contentSize: horizontal
+              ? { width: contentLength, height: LIST_BREADTH }
+              : { width: LIST_BREADTH, height: contentLength },
+            layoutMeasurement: wrapRect,
+          },
         });
       });
     },
@@ -163,7 +206,12 @@ function renderDragList(props: {
 }
 
 // Starts a drag on DATA[0] and grants the pan responder, centered on item 0.
-async function startGrantedDrag(harness: Harness) {
+// The default touch point suits a vertical list; horizontal ones pass their
+// own, since item 0 doesn't sit at the origin under a mirrored layout.
+async function startGrantedDrag(
+  harness: Harness,
+  origin: { x0: number; y0: number } = { x0: 0, y0: ITEM_EXTENT / 2 }
+) {
   harness.layoutWrapper();
   harness.layoutCells();
   await act(async () => {
@@ -172,10 +220,12 @@ async function startGrantedDrag(harness: Harness) {
   await act(async () => {
     harness.config.onPanResponderGrant?.(
       {} as any,
-      { x0: 0, y0: ITEM_EXTENT / 2, dx: 0, dy: 0 } as any
+      { ...origin, dx: 0, dy: 0 } as any
     );
   });
 }
+
+const ORIGINAL_RTL = I18nManager.isRTL;
 
 beforeEach(() => {
   // Fake timers keep the slide/pan Animated timers from firing after teardown.
@@ -183,6 +233,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  (I18nManager as { isRTL: boolean }).isRTL = ORIGINAL_RTL;
   renderers.forEach(renderer => {
     act(() => renderer.unmount());
   });
@@ -804,6 +855,197 @@ describe("hover changes don't re-render rows (perf)", () => {
     const resolved =
       typeof value === "number" ? value : value?.__getValue?.();
     expect(resolved).toBe(0);
+  });
+});
+
+describe("mirrored layouts (bug: RTL horizontal drags are frozen)", () => {
+  // Under RTL, Yoga mirrors the row so item 0 sits at the far right and
+  // cached positions descend with index. Walking the axis in coordinate
+  // order then pinned the hover index at 0 for the whole drag: the gap never
+  // followed your finger, neighbors slid away from the vacated slot instead
+  // of into it, and every drop reordered to index 0.
+  function cellTransform(harness: Harness, item: string): any {
+    const cells = harness.renderer.root.findAll(
+      node =>
+        typeof node.type === "function" &&
+        node.type.name === "CellRendererComponent"
+    );
+    const cell = cells.find(c => c.props.item === item)!;
+    // Horizontal lists hand CellRendererComponent its own `style` prop, so
+    // the cell node itself matches this predicate and has to be excluded to
+    // reach the Animated.View underneath.
+    const animatedView = cell.findAll(
+      (node: any) =>
+        node !== cell &&
+        typeof node.type !== "string" &&
+        node.props &&
+        typeof node.props.onLayout === "function" &&
+        node.props.style
+    )[0];
+    const flat = [animatedView.props.style]
+      .flat(Infinity)
+      .filter(Boolean)
+      .reduce((acc: any, s: any) => ({ ...acc, ...s }), {});
+    return flat.transform?.[0] ?? {};
+  }
+
+  // Item 0's center: at the origin end of the axis for LTR, at the far end
+  // for RTL.
+  const LTR_ITEM0_CENTER = ITEM_EXTENT / 2;
+  const RTL_ITEM0_CENTER = LIST_EXTENT - ITEM_EXTENT / 2;
+
+  it("tracks the hover index across a mirrored horizontal drag", async () => {
+    (I18nManager as { isRTL: boolean }).isRTL = true;
+    const onHoverChanged = jest.fn();
+    const harness = renderDragList({ horizontal: true, onHoverChanged });
+    await startGrantedDrag(harness, { x0: RTL_ITEM0_CENTER, y0: 0 });
+
+    // Under RTL, dragging leftward moves toward later indices.
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: RTL_ITEM0_CENTER, y0: 0, dx: -120, dy: 0 } as any
+      );
+    });
+
+    expect(onHoverChanged).toHaveBeenCalledWith(1);
+  });
+
+  it("reorders to the dropped position rather than to index 0 under RTL", async () => {
+    (I18nManager as { isRTL: boolean }).isRTL = true;
+    const onReordered = jest.fn();
+    const harness = renderDragList({ horizontal: true, onReordered });
+    await startGrantedDrag(harness, { x0: RTL_ITEM0_CENTER, y0: 0 });
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: RTL_ITEM0_CENTER, y0: 0, dx: -120, dy: 0 } as any
+      );
+    });
+    await act(async () => {
+      harness.config.onPanResponderRelease?.(
+        {} as any,
+        { x0: RTL_ITEM0_CENTER, y0: 0, dx: -120, dy: 0 } as any
+      );
+    });
+
+    expect(onReordered).toHaveBeenCalledWith(0, 1);
+  });
+
+  it("slides a displaced neighbor into the vacated slot under RTL", async () => {
+    (I18nManager as { isRTL: boolean }).isRTL = true;
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: RTL_ITEM0_CENTER, y0: 0 });
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: RTL_ITEM0_CENTER, y0: 0, dx: -120, dy: 0 } as any
+      );
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(400);
+    });
+
+    // alpha vacated the rightmost slot, so beta must slide right (toward
+    // higher coordinates) to fill it. Sliding left would open the
+    // double-width gap this bug was reported for.
+    const value = cellTransform(harness, "beta").translateX;
+    expect(value?.__getValue?.()).toBe(ITEM_EXTENT);
+  });
+
+  // A content length that overflows the viewport, so auto-scroll has
+  // somewhere to go.
+  const CONTENT_LENGTH = 2 * LIST_EXTENT;
+
+  function spyOnScrollToOffset(harness: Harness) {
+    const list = harness.flatList().instance as unknown as {
+      scrollToOffset: (params: { animated?: boolean; offset: number }) => void;
+    };
+    return jest
+      .spyOn(list, "scrollToOffset")
+      .mockImplementation(() => undefined);
+  }
+
+  it("auto-scrolls a mirrored list by an offset measured from the start of the data", async () => {
+    (I18nManager as { isRTL: boolean }).isRTL = true;
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: RTL_ITEM0_CENTER, y0: 0 });
+    // Showing the very start of the data: under RTL that sits at the far end
+    // of the axis, so contentOffset reads LIST_EXTENT while the offset
+    // scrollToOffset wants is 0.
+    harness.scroll(LIST_EXTENT, CONTENT_LENGTH);
+    const scrollToOffset = spyOnScrollToOffset(harness);
+
+    // Drag off the origin end of the axis, which under RTL means asking for
+    // later items.
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: RTL_ITEM0_CENTER, y0: 0, dx: -RTL_ITEM0_CENTER, dy: 0 } as any
+      );
+    });
+
+    // One item further into the data. Passing the cartesian position here
+    // instead makes VirtualizedList mirror an already-mirrored number and
+    // fling the list most of its length.
+    expect(scrollToOffset).toHaveBeenCalledWith({
+      animated: true,
+      offset: ITEM_EXTENT,
+    });
+  });
+
+  it("auto-scrolls a non-mirrored list by its cartesian offset", async () => {
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+    harness.scroll(LIST_EXTENT / 2, CONTENT_LENGTH);
+    const scrollToOffset = spyOnScrollToOffset(harness);
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: LIST_EXTENT, dy: 0 } as any
+      );
+    });
+
+    expect(scrollToOffset).toHaveBeenCalledWith({
+      animated: true,
+      offset: LIST_EXTENT / 2 + ITEM_EXTENT,
+    });
+  });
+
+  it("still tracks the hover index in a non-mirrored horizontal drag", async () => {
+    const onHoverChanged = jest.fn();
+    const harness = renderDragList({ horizontal: true, onHoverChanged });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: 120, dy: 0 } as any
+      );
+    });
+
+    expect(onHoverChanged).toHaveBeenCalledWith(1);
+  });
+
+  it("still slides a displaced neighbor backwards in a non-mirrored horizontal drag", async () => {
+    const harness = renderDragList({ horizontal: true });
+    await startGrantedDrag(harness, { x0: LTR_ITEM0_CENTER, y0: 0 });
+
+    await act(async () => {
+      harness.config.onPanResponderMove?.(
+        {} as any,
+        { x0: LTR_ITEM0_CENTER, y0: 0, dx: 120, dy: 0 } as any
+      );
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(400);
+    });
+
+    const value = cellTransform(harness, "beta").translateX;
+    expect(value?.__getValue?.()).toBe(-ITEM_EXTENT);
   });
 });
 
